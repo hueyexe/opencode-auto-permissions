@@ -1,0 +1,49 @@
+{
+  "name": "opencode-auto-permissions",
+  "version": "0.0.0",
+  "description": "Automatic, model-driven permission review for OpenCode",
+  "type": "module",
+  "private": true,
+  "license": "MIT",
+  "main": "./dist/server.js",
+  "exports": {
+    ".": "./dist/server.js",
+    "./server": "./dist/server.js",
+    "./tui": "./dist/tui.js"
+  },
+  "files": [
+    "dist",
+    "INSTALL.md",
+    "LICENSE",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "rm -rf dist && bun build src/server.ts src/tui.ts --outdir dist --target bun --format esm",
+    "check": "tsc --noEmit",
+    "test": "bun test",
+    "test:coverage": "bun test --coverage",
+    "verify": "bun run check && bun run test && bun run build && bun run test:package",
+    "test:package": "bun test test/package.test.ts"
+  },
+  "keywords": [
+    "opencode",
+    "opencode-plugin",
+    "permissions",
+    "auto-approval",
+    "safety",
+    "llm"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "devDependencies": {
+    "@opencode-ai/plugin": "0.0.0-beta-202608040144",
+    "@opencode-ai/sdk": "0.0.0-beta-202608040144",
+    "@opentui/core": "0.4.5",
+    "@opentui/keymap": "0.4.5",
+    "@opentui/solid": "0.4.5",
+    "@types/bun": "1.3.14",
+    "opencode-ai": "0.0.0-beta-202608040144",
+    "typescript": "5.9.3"
+  }
+}
