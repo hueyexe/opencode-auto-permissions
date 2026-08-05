@@ -26,7 +26,7 @@ export function createStableRuntime(
   }
 
   const syncMessages = async (sessionID: string) => {
-    const result = unwrap(await client.session.messages({ sessionID, directory, limit: 200 }))
+    const result = unwrap(await client.session.messages({ path: { id: sessionID }, query: { directory, limit: 200 } }))
     messages.set(sessionID, Array.isArray(result) ? result : [])
   }
 
@@ -47,7 +47,7 @@ export function createStableRuntime(
       seen.add(current)
       let session = sessions.get(current)
       if (!session) {
-        const result = unwrap(await client.session.get({ sessionID: current, directory }))
+        const result = unwrap(await client.session.get({ path: { id: current }, query: { directory } }))
         if (!isRecord(result) || typeof result.id !== "string") return sessionID
         session = {
           id: result.id,
@@ -127,7 +127,7 @@ export function protocolForVersion(version: string | undefined): "stable" | "v2"
 }
 
 function compatibleClient(value: any): any {
-  if (value?.v2 && value?.permission && value?.session) return value
+  if (isRecord(value)) return value
   throw new Error("OpenCode compatible authenticated client is unavailable")
 }
 

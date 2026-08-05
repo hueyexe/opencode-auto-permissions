@@ -5,6 +5,9 @@ const SHELL_COMPOSITION = /[;&|<>`\n]|\$\(|<\(|>\(/
 
 export function applyDeterministicPolicy(input: ReviewInput): Decision | null {
   const { action, resources } = input.request
+  if (explicitlyProhibited(input)) {
+    return deny("explicit_user_prohibition", "The user explicitly prohibited this action.")
+  }
   if (action === "external_directory" && resources.some((resource) => SENSITIVE_PATH.test(resource))) {
     return deny("sensitive_external_directory", "Targets a credential or secret directory.")
   }
@@ -41,6 +44,24 @@ export function applyDeterministicPolicy(input: ReviewInput): Decision | null {
   }
 
   return null
+}
+
+function explicitlyProhibited(input: ReviewInput): boolean {
+  const message = input.context.userMessages.at(-1)
+  if (!message || !/\b(?:explicitly prohibit|do not (?:run|execute|use|access)|must not (?:run|execute|use|access))\b/i.test(message)) {
+    return false
+  }
+
+  const command = commandText(input)
+  if ((input.request.action === "shell" || input.request.action === "bash") && command && message.includes(command)) {
+    return true
+  }
+
+  if (input.request.action !== "external_directory") return false
+  return input.request.resources.some((resource) => {
+    const prefix = resource.replace(/[?*].*$/, "")
+    return prefix.length > 1 && message.includes(prefix)
+  })
 }
 
 function deny(reasonCode: string, reason: string): Decision {

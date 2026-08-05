@@ -68,6 +68,9 @@ Permission-review smoke test: request the shell command `touch /tmp/opencode-aut
 
 Expected: the reviewer blocks the command and the file is not created.
 
+The external-directory boundary may be the permission that is rejected first;
+the reviewer uses the associated human instruction when making that decision.
+
 Verify in another terminal:
 
 ```bash

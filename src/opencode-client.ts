@@ -36,7 +36,8 @@ export class OpenCodeClientAdapter implements ReviewerClient {
     location?: { directory?: string; workspaceID?: string }
     signal: AbortSignal
   }): Promise<unknown> {
-    const session = this.client.session
+    const stable = typeof this.client.postSessionIdPermissionsPermissionId === "function"
+    const session = stable ? this.client.session : (this.client.v2?.session ?? this.client.session)
     if (!session || typeof session.create !== "function" || typeof session.prompt !== "function") {
       throw new Error("OpenCode reviewer session API is unavailable")
     }
@@ -52,9 +53,12 @@ export class OpenCodeClientAdapter implements ReviewerClient {
 
     try {
       if (input.signal.aborted) throw abortError(input.signal.reason)
-      const created = unwrapData(
-        await session.create(
-          {
+      const createInput = stable
+        ? {
+            query: location,
+            body: { parentID: input.parentSessionID, title: "Auto Permissions review" },
+          }
+        : {
             ...location,
             parentID: input.parentSessionID,
             title: "Auto Permissions review",
@@ -62,38 +66,40 @@ export class OpenCodeClientAdapter implements ReviewerClient {
             model: input.model,
             metadata: { source: "opencode-auto-permissions" },
             permission: REVIEWER_PERMISSIONS,
-          },
-          { signal: input.signal },
-        ),
-      )
+          }
+      const created = unwrapData(await session.create(createInput, { signal: input.signal }))
       if (!isRecord(created) || typeof created.id !== "string") {
         throw new Error("OpenCode failed to create a reviewer session")
       }
       sessionID = created.id
 
-      const result = unwrapData(
-        await session.prompt(
-          {
+      const promptBody = {
+        model: { providerID: input.model.providerID, modelID: input.model.id },
+        variant: input.model.variant,
+        agent: REVIEWER_AGENT_ID,
+        format: {
+          type: "json_schema",
+          schema: DECISION_SCHEMA,
+          retryCount: 1,
+        },
+        parts: [{ type: "text", text: input.prompt }],
+      }
+      const promptInput = stable
+        ? { path: { id: sessionID }, query: location, body: promptBody }
+        : {
             sessionID,
             ...location,
-            model: { providerID: input.model.providerID, modelID: input.model.id },
-            variant: input.model.variant,
-            agent: REVIEWER_AGENT_ID,
-            format: {
-              type: "json_schema",
-              schema: DECISION_SCHEMA,
-              retryCount: 1,
-            },
-            parts: [{ type: "text", text: input.prompt }],
-          },
-          { signal: input.signal },
-        ),
-      )
+            ...promptBody,
+          }
+      const result = unwrapData(await session.prompt(promptInput, { signal: input.signal }))
       return assistantStructured(result)
     } finally {
       input.signal.removeEventListener("abort", abortRemote)
       if (sessionID && typeof session.delete === "function") {
-        await Promise.resolve(session.delete({ sessionID, ...location })).catch(() => undefined)
+        const deleteInput = stable
+          ? { path: { id: sessionID }, query: location }
+          : { sessionID, ...location }
+        await Promise.resolve(session.delete(deleteInput)).catch(() => undefined)
       }
     }
   }
@@ -106,16 +112,26 @@ export class OpenCodeClientAdapter implements ReviewerClient {
     protocol: "stable" | "v2"
   }): Promise<"replied" | "not_found"> {
     try {
-      const scoped = this.client.v2?.session?.permission
+      const scoped = this.client.v2?.session?.permission ?? this.client.session?.permission
       if (input.protocol === "v2" && typeof scoped?.reply === "function") {
-        const result = await scoped.reply(input)
-        throwForResultError(result)
-        return "replied"
+        try {
+          const result = await scoped.reply(input)
+          throwForResultError(result)
+          return "replied"
+        } catch (error) {
+          if (!isNotFound(error) || typeof this.client.permission?.reply !== "function") throw error
+        }
       }
 
       const legacy = this.client.permission
-      if (typeof legacy?.reply !== "function") throw new Error("OpenCode V2 permission reply API is unavailable")
-      const result = await legacy.reply(input)
+      const result = typeof legacy?.reply === "function"
+        ? await legacy.reply(input)
+        : typeof this.client.postSessionIdPermissionsPermissionId === "function"
+          ? await this.client.postSessionIdPermissionsPermissionId({
+              path: { id: input.sessionID, permissionID: input.requestID },
+              body: { response: input.reply },
+            })
+          : (() => { throw new Error("OpenCode permission reply API is unavailable") })()
       throwForResultError(result)
       return "replied"
     } catch (error) {

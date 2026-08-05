@@ -210,4 +210,27 @@ describe("installReviewer", () => {
     ])
     dispose()
   })
+
+  test("claims transitional permission.asked events for a V2-only owner", async () => {
+    const app = harness()
+    const pending = request("git status")
+    app.requests.push(pending)
+    const dispose = installReviewer(app.context, { client: app.client, protocols: ["v2"] })
+
+    app.emit("permission.asked", {
+      id: pending.id,
+      sessionID: pending.sessionID,
+      permission: "bash",
+      patterns: pending.resources,
+      metadata: {},
+      always: [],
+      tool: { messageID: "msg_assistant", callID: "call_1" },
+    })
+    await settle()
+
+    expect(app.replies).toEqual([
+      { sessionID: "ses_root", requestID: "per_1", reply: "once", protocol: "v2" },
+    ])
+    dispose()
+  })
 })

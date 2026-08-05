@@ -112,7 +112,8 @@ class OpenCodeClientAdapter {
     await Promise.all(requests);
   }
   async generate(input) {
-    const session = this.client.session;
+    const stable = typeof this.client.postSessionIdPermissionsPermissionId === "function";
+    const session = stable ? this.client.session : this.client.v2?.session ?? this.client.session;
     if (!session || typeof session.create !== "function" || typeof session.prompt !== "function") {
       throw new Error("OpenCode reviewer session API is unavailable");
     }
@@ -130,7 +131,10 @@ class OpenCodeClientAdapter {
     try {
       if (input.signal.aborted)
         throw abortError(input.signal.reason);
-      const created = unwrapData(await session.create({
+      const createInput = stable ? {
+        query: location,
+        body: { parentID: input.parentSessionID, title: "Auto Permissions review" }
+      } : {
         ...location,
         parentID: input.parentSessionID,
         title: "Auto Permissions review",
@@ -138,14 +142,13 @@ class OpenCodeClientAdapter {
         model: input.model,
         metadata: { source: "opencode-auto-permissions" },
         permission: REVIEWER_PERMISSIONS
-      }, { signal: input.signal }));
+      };
+      const created = unwrapData(await session.create(createInput, { signal: input.signal }));
       if (!isRecord(created) || typeof created.id !== "string") {
         throw new Error("OpenCode failed to create a reviewer session");
       }
       sessionID = created.id;
-      const result = unwrapData(await session.prompt({
-        sessionID,
-        ...location,
+      const promptBody = {
         model: { providerID: input.model.providerID, modelID: input.model.id },
         variant: input.model.variant,
         agent: REVIEWER_AGENT_ID,
@@ -155,12 +158,19 @@ class OpenCodeClientAdapter {
           retryCount: 1
         },
         parts: [{ type: "text", text: input.prompt }]
-      }, { signal: input.signal }));
+      };
+      const promptInput = stable ? { path: { id: sessionID }, query: location, body: promptBody } : {
+        sessionID,
+        ...location,
+        ...promptBody
+      };
+      const result = unwrapData(await session.prompt(promptInput, { signal: input.signal }));
       return assistantStructured(result);
     } finally {
       input.signal.removeEventListener("abort", abortRemote);
       if (sessionID && typeof session.delete === "function") {
-        await Promise.resolve(session.delete({ sessionID, ...location })).catch(() => {
+        const deleteInput = stable ? { path: { id: sessionID }, query: location } : { sessionID, ...location };
+        await Promise.resolve(session.delete(deleteInput)).catch(() => {
           return;
         });
       }
@@ -168,16 +178,24 @@ class OpenCodeClientAdapter {
   }
   async reply(input) {
     try {
-      const scoped = this.client.v2?.session?.permission;
+      const scoped = this.client.v2?.session?.permission ?? this.client.session?.permission;
       if (input.protocol === "v2" && typeof scoped?.reply === "function") {
-        const result2 = await scoped.reply(input);
-        throwForResultError(result2);
-        return "replied";
+        try {
+          const result2 = await scoped.reply(input);
+          throwForResultError(result2);
+          return "replied";
+        } catch (error) {
+          if (!isNotFound(error) || typeof this.client.permission?.reply !== "function")
+            throw error;
+        }
       }
       const legacy = this.client.permission;
-      if (typeof legacy?.reply !== "function")
-        throw new Error("OpenCode V2 permission reply API is unavailable");
-      const result = await legacy.reply(input);
+      const result = typeof legacy?.reply === "function" ? await legacy.reply(input) : typeof this.client.postSessionIdPermissionsPermissionId === "function" ? await this.client.postSessionIdPermissionsPermissionId({
+        path: { id: input.sessionID, permissionID: input.requestID },
+        body: { response: input.reply }
+      }) : (() => {
+        throw new Error("OpenCode permission reply API is unavailable");
+      })();
       throwForResultError(result);
       return "replied";
     } catch (error) {
@@ -351,6 +369,9 @@ var SENSITIVE_PATH = /(?:^|[\\/])(?:\.ssh|\.aws|\.gnupg|Keychains?|credentials?|
 var SHELL_COMPOSITION = /[;&|<>`\n]|\$\(|<\(|>\(/;
 function applyDeterministicPolicy(input) {
   const { action, resources } = input.request;
+  if (explicitlyProhibited(input)) {
+    return deny("explicit_user_prohibition", "The user explicitly prohibited this action.");
+  }
   if (action === "external_directory" && resources.some((resource) => SENSITIVE_PATH.test(resource))) {
     return deny("sensitive_external_directory", "Targets a credential or secret directory.");
   }
@@ -385,6 +406,22 @@ function applyDeterministicPolicy(input) {
     };
   }
   return null;
+}
+function explicitlyProhibited(input) {
+  const message = input.context.userMessages.at(-1);
+  if (!message || !/\b(?:explicitly prohibit|do not (?:run|execute|use|access)|must not (?:run|execute|use|access))\b/i.test(message)) {
+    return false;
+  }
+  const command = commandText(input);
+  if ((input.request.action === "shell" || input.request.action === "bash") && command && message.includes(command)) {
+    return true;
+  }
+  if (input.request.action !== "external_directory")
+    return false;
+  return input.request.resources.some((resource) => {
+    const prefix = resource.replace(/[?*].*$/, "");
+    return prefix.length > 1 && message.includes(prefix);
+  });
 }
 function deny(reasonCode, reason) {
   return { kind: "deny", reasonCode, reason };
@@ -450,7 +487,8 @@ function installReviewer(context, overrides = {}) {
   const config = parseConfig(context.options);
   const client = overrides.client ?? new OpenCodeClientAdapter(context.client);
   const inFlight = new Map;
-  const protocols = new Set(overrides.protocols ?? ["stable", "v2"]);
+  const configuredProtocols = overrides.protocols ?? ["stable", "v2"];
+  const protocols = new Set(configuredProtocols);
   client.prewarm?.().catch(() => {
     return;
   });
@@ -486,7 +524,8 @@ function installReviewer(context, overrides = {}) {
     });
   });
   const offStableAsked = context.data.on("permission.asked", (event) => {
-    const asked = normalizeAskedEvent(event);
+    const normalized = normalizeAskedEvent(event);
+    const asked = normalized && configuredProtocols.length === 1 ? { ...normalized, protocol: configuredProtocols[0] } : normalized;
     if (!asked || !protocols.has(asked.protocol) || !SUPPORTED_ACTIONS.has(asked.action) || inFlight.has(asked.id))
       return;
     const controller = new AbortController;
@@ -536,7 +575,8 @@ async function reviewAndReply(context, client, config, request, parentSignal, ov
     });
     return;
   }
-  if (!await isRequestPending(context, request) || parentSignal.aborted)
+  const pending = await isRequestPending(context, request);
+  if (!pending || parentSignal.aborted)
     return;
   if (decision.kind === "allow") {
     await client.reply({
@@ -597,7 +637,7 @@ function createStableRuntime(injectedClient, options, directory2) {
       handler(event);
   };
   const syncMessages = async (sessionID) => {
-    const result = unwrap(await client.session.messages({ sessionID, directory: directory2, limit: 200 }));
+    const result = unwrap(await client.session.messages({ path: { id: sessionID }, query: { directory: directory2, limit: 200 } }));
     messages.set(sessionID, Array.isArray(result) ? result : []);
   };
   const syncPermissions = async () => {
@@ -618,7 +658,7 @@ function createStableRuntime(injectedClient, options, directory2) {
       seen.add(current);
       let session = sessions.get(current);
       if (!session) {
-        const result = unwrap(await client.session.get({ sessionID: current, directory: directory2 }));
+        const result = unwrap(await client.session.get({ path: { id: current }, query: { directory: directory2 } }));
         if (!isRecord4(result) || typeof result.id !== "string")
           return sessionID;
         session = {
@@ -704,7 +744,7 @@ function protocolForVersion(version) {
   return major >= 2 ? "v2" : "stable";
 }
 function compatibleClient(value) {
-  if (value?.v2 && value?.permission && value?.session)
+  if (isRecord4(value))
     return value;
   throw new Error("OpenCode compatible authenticated client is unavailable");
 }
@@ -750,12 +790,17 @@ var legacyPlugin = async (input, options = {}) => {
   const reviewerSessions = new Map;
   const stable = createStableRuntime(input.client, options, input.directory);
   let stopStableReviewer;
-  let ownership;
-  const ownsStable = () => ownership ??= (async () => {
+  let detectedProtocol;
+  const ownsStable = async () => {
     if (config.runtime !== "auto")
       return config.runtime === "stable";
-    return protocolForVersion(await stable.version()) === "stable";
-  })();
+    if (detectedProtocol)
+      return detectedProtocol === "stable";
+    const detected = protocolForVersion(await stable.version());
+    if (detected)
+      detectedProtocol = detected;
+    return detected === "stable";
+  };
   const startStableReviewer = async () => {
     if (!await ownsStable())
       return false;
@@ -792,6 +837,7 @@ var legacyPlugin = async (input, options = {}) => {
       output.system.splice(0, output.system.length, REVIEWER_SYSTEM_PROMPT);
     },
     async event(input2) {
+      detectedProtocol ??= protocolForVersion(eventVersion(input2.event));
       if (!await startStableReviewer())
         return;
       stable.emit(input2.event);
@@ -805,6 +851,15 @@ var legacyPlugin = async (input, options = {}) => {
     }
   };
 };
+function eventVersion(event) {
+  if (typeof event !== "object" || event === null)
+    return;
+  const payload2 = Reflect.get(event, "properties") ?? Reflect.get(event, "data");
+  if (typeof payload2 !== "object" || payload2 === null)
+    return;
+  const info = Reflect.get(payload2, "info");
+  return typeof info === "object" && info !== null && typeof Reflect.get(info, "version") === "string" ? Reflect.get(info, "version") : undefined;
+}
 var serverPlugin = {
   ...v2Plugin,
   server: legacyPlugin

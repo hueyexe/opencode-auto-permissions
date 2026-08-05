@@ -32,7 +32,7 @@ const testRoot = join("/tmp", `opencode-auto-permissions-${runtime}-test`)
 const lockDirectory = join("/tmp", "opencode-auto-permissions-runtime-test.lock")
 const configRoot = join(testRoot, "config")
 const opencodeConfig = join(configRoot, "opencode", "opencode.json")
-const cliConfig = join(configRoot, "opencode", "cli.json")
+const tuiConfig = join(configRoot, "opencode", "tui.json")
 const logFile = join(testRoot, "server.log")
 
 await acquireLock()
@@ -64,32 +64,7 @@ await Promise.all([
 ])
 
 const options = { model }
-await writeFile(
-  opencodeConfig,
-  JSON.stringify(
-    {
-      $schema: "https://opencode.ai/config.json",
-      provider: { [providerID]: provider },
-      plugin: [[join(root, "dist", "server.js"), options]],
-      permission: { bash: "ask", external_directory: "ask" },
-    },
-    null,
-    2,
-  ) + "\n",
-  { mode: 0o600 },
-)
-
-await writeFile(
-  cliConfig,
-  JSON.stringify(
-    runtime === "v2"
-      ? { plugins: [{ package: join(root, "dist", "tui.js"), options }] }
-      : {},
-    null,
-    2,
-  ) + "\n",
-  { mode: 0o600 },
-)
+await writeTestConfigs()
 
 const port = await freePort()
 const env = {
@@ -103,6 +78,11 @@ const env = {
   OPENCODE_DISABLE_PROJECT_CONFIG: "1",
   OPENCODE_DISABLE_EXTERNAL_SKILLS: "1",
   OPENCODE_DISABLE_CLAUDE_CODE_SKILLS: "1",
+}
+
+if (runtime === "v2") {
+  await run([binary, "plugin", root, "--global", "--force"], env)
+  await writeTestConfigs()
 }
 
 const server = Bun.spawn([binary, "serve", "--hostname", "127.0.0.1", "--port", String(port)], {
@@ -241,4 +221,37 @@ function releaseLockSync(): void {
   try {
     rmSync(lockDirectory, { recursive: true, force: true })
   } catch {}
+}
+
+async function writeTestConfigs(): Promise<void> {
+  await writeFile(
+    opencodeConfig,
+    JSON.stringify(
+      {
+        $schema: "https://opencode.ai/config.json",
+        model,
+        provider: { [providerID]: provider },
+        plugin: [[runtime === "v2" ? root : join(root, "dist", "server.js"), options]],
+        permission: { bash: "ask", external_directory: "ask" },
+      },
+      null,
+      2,
+    ) + "\n",
+    { mode: 0o600 },
+  )
+
+  await writeFile(
+    tuiConfig,
+    JSON.stringify(
+      runtime === "v2"
+        ? {
+            $schema: "https://opencode.ai/tui.json",
+            plugin: [[root, options]],
+          }
+        : {},
+      null,
+      2,
+    ) + "\n",
+    { mode: 0o600 },
+  )
 }

@@ -4,19 +4,20 @@ import { installReviewer } from "./reviewer.ts"
 
 export const id = "opencode.auto-permissions"
 
+export const tui: TuiPlugin = async (api, options) => {
+  const dispose = installReviewer(fromLegacyApi(api, options ?? {}), { protocols: ["v2"] })
+  api.lifecycle.onDispose(dispose)
+}
+
 const plugin = {
   id,
+  tui,
   setup(context: RuntimeContext) {
     return installReviewer(fromCurrentContext(context), { protocols: ["v2"] })
   },
 }
 
 export default plugin
-
-export const tui: TuiPlugin = async (api, options) => {
-  const dispose = installReviewer(fromLegacyApi(api, options ?? {}), { protocols: ["v2"] })
-  api.lifecycle.onDispose(dispose)
-}
 
 function fromCurrentContext(context: RuntimeContext & { ui?: any }): RuntimeContext {
   if (context.showToast) return context
@@ -58,9 +59,12 @@ function fromLegacyApi(api: TuiPluginApi, options: Readonly<Record<string, unkno
         },
         get: (sessionID) => api.state.session.get(sessionID),
         message: {
-          list: (sessionID) => api.state.session.messages(sessionID) as never,
-          get: (sessionID, messageID) =>
-            api.state.session.messages(sessionID).find((message) => message.id === messageID) as never,
+          list: (sessionID) =>
+            api.state.session.messages(sessionID).map((info) => ({ info, parts: api.state.part(info.id) })),
+          get: (sessionID, messageID) => {
+            const info = api.state.session.messages(sessionID).find((message) => message.id === messageID)
+            return info ? { info, parts: api.state.part(info.id) } : undefined
+          },
           sync: async () => {},
         },
         permission: {

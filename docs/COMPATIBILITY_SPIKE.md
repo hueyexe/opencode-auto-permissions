@@ -39,6 +39,9 @@ OpenCode `1.18.12`.
   without human input, and ended with zero pending permissions.
 - A live stable Luna review blocked a prohibited shell command and ended with
   zero pending permissions.
+- Complete real-TUI runs passed on both stable and V2: `git status --short`
+  resolved automatically, while an explicitly prohibited `touch` command was
+  rejected and did not create its target file.
 
 ## Measurements
 
@@ -73,11 +76,10 @@ target sub-1.5-second P95 UX.
 - `retryCount` is accepted in the structured-output request, but this beta
   reports structured-output failures with `retries: 0`. The plugin fails to
   manual approval rather than parsing malformed model text.
-
-## Remaining V2 Milestone 0 Gap
-
-The model lifecycle and permission reply lifecycle have each passed against the
-real beta server. The packaged TUI entrypoint imports successfully and its
-event/race behavior is covered by tests, but a complete interactive run from a
-real TUI-generated permission event through automatic review and resolution is
-still required before a prerelease tag.
+- The pinned beta emits transitional `permission.asked` events and stores them
+  in the legacy queue even when the V2 TUI owns review. The adapter claims those
+  events and falls back to the legacy reply endpoint only after a session-scoped
+  V2 `PermissionNotFoundError`.
+- The stable SDK has no health/version endpoint. Runtime ownership is learned
+  from version-bearing session events and is not cached until detection
+  succeeds.

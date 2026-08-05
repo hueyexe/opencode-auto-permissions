@@ -28,12 +28,14 @@ const legacyPlugin: Plugin = async (input, options = {}) => {
   const reviewerSessions = new Map<string, ReturnType<typeof setTimeout>>()
   const stable = createStableRuntime(input.client, options, input.directory)
   let stopStableReviewer: (() => void) | undefined
-  let ownership: Promise<boolean> | undefined
-  const ownsStable = () =>
-    (ownership ??= (async () => {
-      if (config.runtime !== "auto") return config.runtime === "stable"
-      return protocolForVersion(await stable.version()) === "stable"
-    })())
+  let detectedProtocol: "stable" | "v2" | undefined
+  const ownsStable = async () => {
+    if (config.runtime !== "auto") return config.runtime === "stable"
+    if (detectedProtocol) return detectedProtocol === "stable"
+    const detected = protocolForVersion(await stable.version())
+    if (detected) detectedProtocol = detected
+    return detected === "stable"
+  }
   const startStableReviewer = async () => {
     if (!(await ownsStable())) return false
     stopStableReviewer ??= installReviewer(stable.context, { protocols: ["stable"] })
@@ -69,6 +71,7 @@ const legacyPlugin: Plugin = async (input, options = {}) => {
       output.system.splice(0, output.system.length, REVIEWER_SYSTEM_PROMPT)
     },
     async event(input) {
+      detectedProtocol ??= protocolForVersion(eventVersion(input.event))
       if (!(await startStableReviewer())) return
       stable.emit(input.event)
     },
@@ -79,6 +82,16 @@ const legacyPlugin: Plugin = async (input, options = {}) => {
       reviewerSessions.clear()
     },
   }
+}
+
+function eventVersion(event: unknown): string | undefined {
+  if (typeof event !== "object" || event === null) return undefined
+  const payload = Reflect.get(event, "properties") ?? Reflect.get(event, "data")
+  if (typeof payload !== "object" || payload === null) return undefined
+  const info = Reflect.get(payload, "info")
+  return typeof info === "object" && info !== null && typeof Reflect.get(info, "version") === "string"
+    ? Reflect.get(info, "version")
+    : undefined
 }
 
 const serverPlugin = {

@@ -71,6 +71,41 @@ describe("OpenCodeClientAdapter", () => {
     })
   })
 
+  test("prefers the V2 subclient for structured reviewer sessions when available", async () => {
+    const calls: string[] = []
+    const client = new OpenCodeClientAdapter({
+      session: {
+        create: async () => {
+          calls.push("legacy")
+          return { data: { id: "ses_legacy" } }
+        },
+        prompt: async () => ({ data: {} }),
+      },
+      v2: {
+        session: {
+          create: async () => {
+            calls.push("v2-create")
+            return { data: { id: "ses_review" } }
+          },
+          prompt: async () => {
+            calls.push("v2-prompt")
+            return { data: { info: { structured: { decision: "ask", reasonCode: "x", reason: "Review." } } } }
+          },
+          delete: async () => calls.push("v2-delete"),
+        },
+      },
+    })
+
+    await client.generate({
+      prompt: "review",
+      model: { providerID: "example", id: "luna-5.6" },
+      parentSessionID: "ses_parent",
+      signal: new AbortController().signal,
+    })
+
+    expect(calls).toEqual(["v2-create", "v2-prompt", "v2-delete"])
+  })
+
   test("deletes the reviewer session when generation fails", async () => {
     let deleted = false
     const client = new OpenCodeClientAdapter({
@@ -137,6 +172,41 @@ describe("OpenCodeClientAdapter", () => {
     expect(calls).toEqual(["v2"])
   })
 
+  test("uses the direct V2 TUI session permission endpoint", async () => {
+    const calls: string[] = []
+    const client = new OpenCodeClientAdapter({
+      session: {
+        permission: {
+          reply: async () => calls.push("v2-tui"),
+        },
+      },
+    })
+
+    await client.reply({ sessionID: "ses_1", requestID: "per_1", reply: "once", protocol: "v2" })
+
+    expect(calls).toEqual(["v2-tui"])
+  })
+
+  test("falls back for transitional V2 requests in the legacy permission queue", async () => {
+    const calls: string[] = []
+    const client = new OpenCodeClientAdapter({
+      permission: {
+        reply: async () => calls.push("legacy"),
+      },
+      v2: {
+        session: {
+          permission: {
+            reply: async () => ({ error: { _tag: "PermissionNotFoundError" } }),
+          },
+        },
+      },
+    })
+
+    await client.reply({ sessionID: "ses_1", requestID: "per_1", reply: "once", protocol: "v2" })
+
+    expect(calls).toEqual(["legacy"])
+  })
+
   test("uses the stable permission endpoint for stable events", async () => {
     const calls: string[] = []
     const client = new OpenCodeClientAdapter({
@@ -155,5 +225,16 @@ describe("OpenCodeClientAdapter", () => {
     await client.reply({ sessionID: "ses_1", requestID: "per_1", reply: "once", protocol: "stable" })
 
     expect(calls).toEqual(["stable"])
+  })
+
+  test("uses the generated stable permission endpoint", async () => {
+    const calls: unknown[] = []
+    const client = new OpenCodeClientAdapter({
+      postSessionIdPermissionsPermissionId: async (input: unknown) => calls.push(input),
+    })
+
+    await client.reply({ sessionID: "ses_1", requestID: "per_1", reply: "once", protocol: "stable" })
+
+    expect(calls).toEqual([{ path: { id: "ses_1", permissionID: "per_1" }, body: { response: "once" } }])
   })
 })

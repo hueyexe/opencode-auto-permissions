@@ -32,4 +32,26 @@ describe("applyDeterministicPolicy", () => {
   test("does not fast-path composed commands", () => {
     expect(applyDeterministicPolicy(input("pnpm test && git push"))).toBeNull()
   })
+
+  test("does not fast-path arbitrary mutating commands", () => {
+    expect(applyDeterministicPolicy(input("touch /tmp/example"))).toBeNull()
+  })
+
+  test("denies a command the latest human message explicitly prohibits", () => {
+    const value = input("touch /tmp/example")
+    value.context.userMessages = ["Run `touch /tmp/example`, but I explicitly prohibit that command from executing."]
+    expect(applyDeterministicPolicy(value)?.reasonCode).toBe("explicit_user_prohibition")
+  })
+
+  test("denies a matching external boundary the latest human message explicitly prohibits", () => {
+    expect(
+      applyDeterministicPolicy({
+        request: { action: "external_directory", resources: ["/tmp/*"] },
+        context: {
+          rootSessionID: "ses_root",
+          userMessages: ["Do not execute `touch /tmp/example`."],
+        },
+      })?.reasonCode,
+    ).toBe("explicit_user_prohibition")
+  })
 })

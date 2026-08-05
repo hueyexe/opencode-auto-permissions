@@ -21,8 +21,8 @@ function client() {
     global: { health: async () => ({ data: { healthy: true, version: "1.18.12" } }) },
     v2: {},
     session: {
-      get: async ({ sessionID }: { sessionID: string }) => ({ data: sessions.get(sessionID) }),
-      messages: async () => ({
+      get: async ({ path }: { path: { id: string } }) => ({ data: sessions.get(path.id) }),
+      messages: async ({ path }: { path: { id: string } }) => ({
         data: [
           {
             info: { id: "msg_user", role: "user" },
@@ -49,6 +49,17 @@ describe("createStableRuntime", () => {
     expect(protocolForVersion("0.0.0-beta-202608040144")).toBe("v2")
     expect(protocolForVersion("2.0.0")).toBe("v2")
     expect(protocolForVersion(undefined)).toBeUndefined()
+  })
+
+  test("does not permanently classify an unavailable version", async () => {
+    const runtime = createStableRuntime(
+      { ...client(), global: {} },
+      { model: "kiro-openai/gpt-5.6-luna" },
+      "/repo",
+    )
+
+    expect(await runtime.version()).toBeUndefined()
+    runtime.dispose()
   })
 
   test("normalizes legacy permission.updated events and resolves root context", async () => {

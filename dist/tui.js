@@ -71,7 +71,8 @@ class OpenCodeClientAdapter {
     await Promise.all(requests);
   }
   async generate(input) {
-    const session = this.client.session;
+    const stable = typeof this.client.postSessionIdPermissionsPermissionId === "function";
+    const session = stable ? this.client.session : this.client.v2?.session ?? this.client.session;
     if (!session || typeof session.create !== "function" || typeof session.prompt !== "function") {
       throw new Error("OpenCode reviewer session API is unavailable");
     }
@@ -89,7 +90,10 @@ class OpenCodeClientAdapter {
     try {
       if (input.signal.aborted)
         throw abortError(input.signal.reason);
-      const created = unwrapData(await session.create({
+      const createInput = stable ? {
+        query: location,
+        body: { parentID: input.parentSessionID, title: "Auto Permissions review" }
+      } : {
         ...location,
         parentID: input.parentSessionID,
         title: "Auto Permissions review",
@@ -97,14 +101,13 @@ class OpenCodeClientAdapter {
         model: input.model,
         metadata: { source: "opencode-auto-permissions" },
         permission: REVIEWER_PERMISSIONS
-      }, { signal: input.signal }));
+      };
+      const created = unwrapData(await session.create(createInput, { signal: input.signal }));
       if (!isRecord(created) || typeof created.id !== "string") {
         throw new Error("OpenCode failed to create a reviewer session");
       }
       sessionID = created.id;
-      const result = unwrapData(await session.prompt({
-        sessionID,
-        ...location,
+      const promptBody = {
         model: { providerID: input.model.providerID, modelID: input.model.id },
         variant: input.model.variant,
         agent: REVIEWER_AGENT_ID,
@@ -114,12 +117,19 @@ class OpenCodeClientAdapter {
           retryCount: 1
         },
         parts: [{ type: "text", text: input.prompt }]
-      }, { signal: input.signal }));
+      };
+      const promptInput = stable ? { path: { id: sessionID }, query: location, body: promptBody } : {
+        sessionID,
+        ...location,
+        ...promptBody
+      };
+      const result = unwrapData(await session.prompt(promptInput, { signal: input.signal }));
       return assistantStructured(result);
     } finally {
       input.signal.removeEventListener("abort", abortRemote);
       if (sessionID && typeof session.delete === "function") {
-        await Promise.resolve(session.delete({ sessionID, ...location })).catch(() => {
+        const deleteInput = stable ? { path: { id: sessionID }, query: location } : { sessionID, ...location };
+        await Promise.resolve(session.delete(deleteInput)).catch(() => {
           return;
         });
       }
@@ -127,16 +137,24 @@ class OpenCodeClientAdapter {
   }
   async reply(input) {
     try {
-      const scoped = this.client.v2?.session?.permission;
+      const scoped = this.client.v2?.session?.permission ?? this.client.session?.permission;
       if (input.protocol === "v2" && typeof scoped?.reply === "function") {
-        const result2 = await scoped.reply(input);
-        throwForResultError(result2);
-        return "replied";
+        try {
+          const result2 = await scoped.reply(input);
+          throwForResultError(result2);
+          return "replied";
+        } catch (error) {
+          if (!isNotFound(error) || typeof this.client.permission?.reply !== "function")
+            throw error;
+        }
       }
       const legacy = this.client.permission;
-      if (typeof legacy?.reply !== "function")
-        throw new Error("OpenCode V2 permission reply API is unavailable");
-      const result = await legacy.reply(input);
+      const result = typeof legacy?.reply === "function" ? await legacy.reply(input) : typeof this.client.postSessionIdPermissionsPermissionId === "function" ? await this.client.postSessionIdPermissionsPermissionId({
+        path: { id: input.sessionID, permissionID: input.requestID },
+        body: { response: input.reply }
+      }) : (() => {
+        throw new Error("OpenCode permission reply API is unavailable");
+      })();
       throwForResultError(result);
       return "replied";
     } catch (error) {
@@ -351,6 +369,9 @@ var SENSITIVE_PATH = /(?:^|[\\/])(?:\.ssh|\.aws|\.gnupg|Keychains?|credentials?|
 var SHELL_COMPOSITION = /[;&|<>`\n]|\$\(|<\(|>\(/;
 function applyDeterministicPolicy(input) {
   const { action, resources } = input.request;
+  if (explicitlyProhibited(input)) {
+    return deny("explicit_user_prohibition", "The user explicitly prohibited this action.");
+  }
   if (action === "external_directory" && resources.some((resource) => SENSITIVE_PATH.test(resource))) {
     return deny("sensitive_external_directory", "Targets a credential or secret directory.");
   }
@@ -385,6 +406,22 @@ function applyDeterministicPolicy(input) {
     };
   }
   return null;
+}
+function explicitlyProhibited(input) {
+  const message = input.context.userMessages.at(-1);
+  if (!message || !/\b(?:explicitly prohibit|do not (?:run|execute|use|access)|must not (?:run|execute|use|access))\b/i.test(message)) {
+    return false;
+  }
+  const command = commandText(input);
+  if ((input.request.action === "shell" || input.request.action === "bash") && command && message.includes(command)) {
+    return true;
+  }
+  if (input.request.action !== "external_directory")
+    return false;
+  return input.request.resources.some((resource) => {
+    const prefix = resource.replace(/[?*].*$/, "");
+    return prefix.length > 1 && message.includes(prefix);
+  });
 }
 function deny(reasonCode, reason) {
   return { kind: "deny", reasonCode, reason };
@@ -450,7 +487,8 @@ function installReviewer(context, overrides = {}) {
   const config = parseConfig(context.options);
   const client = overrides.client ?? new OpenCodeClientAdapter(context.client);
   const inFlight = new Map;
-  const protocols = new Set(overrides.protocols ?? ["stable", "v2"]);
+  const configuredProtocols = overrides.protocols ?? ["stable", "v2"];
+  const protocols = new Set(configuredProtocols);
   client.prewarm?.().catch(() => {
     return;
   });
@@ -486,7 +524,8 @@ function installReviewer(context, overrides = {}) {
     });
   });
   const offStableAsked = context.data.on("permission.asked", (event) => {
-    const asked = normalizeAskedEvent(event);
+    const normalized = normalizeAskedEvent(event);
+    const asked = normalized && configuredProtocols.length === 1 ? { ...normalized, protocol: configuredProtocols[0] } : normalized;
     if (!asked || !protocols.has(asked.protocol) || !SUPPORTED_ACTIONS.has(asked.action) || inFlight.has(asked.id))
       return;
     const controller = new AbortController;
@@ -536,7 +575,8 @@ async function reviewAndReply(context, client, config, request, parentSignal, ov
     });
     return;
   }
-  if (!await isRequestPending(context, request) || parentSignal.aborted)
+  const pending = await isRequestPending(context, request);
+  if (!pending || parentSignal.aborted)
     return;
   if (decision.kind === "allow") {
     await client.reply({
@@ -581,17 +621,18 @@ async function modelDecision(context, client, config, input, parentSignal) {
 
 // src/tui.ts
 var id = "opencode.auto-permissions";
+var tui = async (api, options) => {
+  const dispose = installReviewer(fromLegacyApi(api, options ?? {}), { protocols: ["v2"] });
+  api.lifecycle.onDispose(dispose);
+};
 var plugin = {
   id,
+  tui,
   setup(context) {
     return installReviewer(fromCurrentContext(context), { protocols: ["v2"] });
   }
 };
 var tui_default = plugin;
-var tui = async (api, options) => {
-  const dispose = installReviewer(fromLegacyApi(api, options ?? {}), { protocols: ["v2"] });
-  api.lifecycle.onDispose(dispose);
-};
 function fromCurrentContext(context) {
   if (context.showToast)
     return context;
@@ -634,8 +675,11 @@ function fromLegacyApi(api, options) {
         },
         get: (sessionID) => api.state.session.get(sessionID),
         message: {
-          list: (sessionID) => api.state.session.messages(sessionID),
-          get: (sessionID, messageID) => api.state.session.messages(sessionID).find((message) => message.id === messageID),
+          list: (sessionID) => api.state.session.messages(sessionID).map((info) => ({ info, parts: api.state.part(info.id) })),
+          get: (sessionID, messageID) => {
+            const info = api.state.session.messages(sessionID).find((message) => message.id === messageID);
+            return info ? { info, parts: api.state.part(info.id) } : undefined;
+          },
           sync: async () => {}
         },
         permission: {

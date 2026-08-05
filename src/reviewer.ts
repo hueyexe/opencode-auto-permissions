@@ -30,7 +30,8 @@ export function installReviewer(context: RuntimeContext, overrides: ReviewerOver
   const config = parseConfig(context.options)
   const client = overrides.client ?? new OpenCodeClientAdapter(context.client)
   const inFlight = new Map<string, AbortController>()
-  const protocols = new Set(overrides.protocols ?? ["stable", "v2"])
+  const configuredProtocols: PermissionProtocol[] = overrides.protocols ?? ["stable", "v2"]
+  const protocols = new Set(configuredProtocols)
   void client.prewarm?.().catch(() => undefined)
 
   const offReplied = context.data.on("permission.v2.replied", (event) => {
@@ -65,7 +66,10 @@ export function installReviewer(context: RuntimeContext, overrides: ReviewerOver
       })
   })
   const offStableAsked = context.data.on("permission.asked", (event) => {
-    const asked = normalizeAskedEvent(event)
+    const normalized = normalizeAskedEvent(event)
+    const asked = normalized && configuredProtocols.length === 1
+      ? { ...normalized, protocol: configuredProtocols[0]! }
+      : normalized
     if (!asked || !protocols.has(asked.protocol) || !SUPPORTED_ACTIONS.has(asked.action) || inFlight.has(asked.id))
       return
     const controller = new AbortController()
@@ -124,7 +128,8 @@ async function reviewAndReply(
     return
   }
 
-  if (!(await isRequestPending(context, request)) || parentSignal.aborted) return
+  const pending = await isRequestPending(context, request)
+  if (!pending || parentSignal.aborted) return
 
   if (decision.kind === "allow") {
     await client.reply({
