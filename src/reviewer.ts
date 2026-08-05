@@ -141,7 +141,7 @@ async function reviewAndReply(
     return
   }
 
-  await client.reply({
+  const result = await client.reply({
     sessionID: request.sessionID,
     requestID: request.id,
     reply: "reject",
@@ -149,6 +149,7 @@ async function reviewAndReply(
     protocol: request.protocol,
   })
   context.showToast?.({ title: "Blocked", message: decision.reason, variant: "warning", duration: 4_000 })
+  if (result === "replied") context.resumeAfterDenial?.(request.sessionID, decision.reason)
 }
 
 async function modelDecision(

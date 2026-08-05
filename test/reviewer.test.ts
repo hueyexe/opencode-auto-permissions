@@ -7,6 +7,7 @@ function harness(options: Record<string, unknown> = { model: "openai/gpt-5.6-lun
   const requests: PermissionRequest[] = []
   const replies: Parameters<ReviewerClient["reply"]>[0][] = []
   const toasts: string[] = []
+  const resumptions: Array<{ sessionID: string; reason: string }> = []
 
   const context: RuntimeContext = {
     options,
@@ -75,6 +76,7 @@ function harness(options: Record<string, unknown> = { model: "openai/gpt-5.6-lun
       location: { default: () => ({ directory: "/repo" }) },
     },
     showToast: (input) => toasts.push(input.title ?? input.message),
+    resumeAfterDenial: (sessionID, reason) => resumptions.push({ sessionID, reason }),
   }
 
   const client: ReviewerClient = {
@@ -91,7 +93,7 @@ function harness(options: Record<string, unknown> = { model: "openai/gpt-5.6-lun
     for (const handler of handlers.get(type) ?? []) handler({ type, data })
   }
 
-  return { context, client, requests, replies, toasts, emit }
+  return { context, client, requests, replies, toasts, resumptions, emit }
 }
 
 function request(command: string, protocol: PermissionRequest["protocol"] = "v2"): PermissionRequest {
@@ -135,6 +137,9 @@ describe("installReviewer", () => {
 
     expect(app.replies[0]).toMatchObject({ reply: "reject", message: expect.stringContaining("blocked") })
     expect(app.toasts).toEqual(["Blocked"])
+    expect(app.resumptions).toEqual([
+      { sessionID: "ses_root", reason: "Uses sudo to elevate privileges." },
+    ])
     dispose()
   })
 

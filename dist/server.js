@@ -587,7 +587,7 @@ async function reviewAndReply(context, client, config, request, parentSignal, ov
     });
     return;
   }
-  await client.reply({
+  const result = await client.reply({
     sessionID: request.sessionID,
     requestID: request.id,
     reply: "reject",
@@ -595,6 +595,8 @@ async function reviewAndReply(context, client, config, request, parentSignal, ov
     protocol: request.protocol
   });
   context.showToast?.({ title: "Blocked", message: decision.reason, variant: "warning", duration: 4000 });
+  if (result === "replied")
+    context.resumeAfterDenial?.(request.sessionID, decision.reason);
 }
 async function modelDecision(context, client, config, input, parentSignal) {
   const timeout = new AbortController;
@@ -700,6 +702,22 @@ function createStableRuntime(injectedClient, options, directory2) {
       if (typeof client.tui?.showToast !== "function")
         return;
       client.tui.showToast({ directory: directory2, ...input }).catch(() => {
+        return;
+      });
+    },
+    resumeAfterDenial(sessionID, reason) {
+      if (typeof client.session?.promptAsync !== "function")
+        return;
+      client.session.promptAsync({
+        path: { id: sessionID },
+        query: { directory: directory2 },
+        body: {
+          parts: [{
+            type: "text",
+            text: `[Auto Permissions] The requested action was blocked: ${reason} Do not retry it. Briefly report the block to the user, then continue with any remaining safe work.`
+          }]
+        }
+      }).catch(() => {
         return;
       });
     }

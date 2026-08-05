@@ -87,6 +87,19 @@ export function createStableRuntime(
       if (typeof client.tui?.showToast !== "function") return
       void client.tui.showToast({ directory, ...input }).catch(() => undefined)
     },
+    resumeAfterDenial(sessionID, reason) {
+      if (typeof client.session?.promptAsync !== "function") return
+      void client.session.promptAsync({
+        path: { id: sessionID },
+        query: { directory },
+        body: {
+          parts: [{
+            type: "text",
+            text: `[Auto Permissions] The requested action was blocked: ${reason} Do not retry it. Briefly report the block to the user, then continue with any remaining safe work.`,
+          }],
+        },
+      }).catch(() => undefined)
+    },
   }
 
   return {

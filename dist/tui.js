@@ -587,7 +587,7 @@ async function reviewAndReply(context, client, config, request, parentSignal, ov
     });
     return;
   }
-  await client.reply({
+  const result = await client.reply({
     sessionID: request.sessionID,
     requestID: request.id,
     reply: "reject",
@@ -595,6 +595,8 @@ async function reviewAndReply(context, client, config, request, parentSignal, ov
     protocol: request.protocol
   });
   context.showToast?.({ title: "Blocked", message: decision.reason, variant: "warning", duration: 4000 });
+  if (result === "replied")
+    context.resumeAfterDenial?.(request.sessionID, decision.reason);
 }
 async function modelDecision(context, client, config, input, parentSignal) {
   const timeout = new AbortController;

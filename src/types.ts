@@ -63,6 +63,7 @@ export interface RuntimeContext {
     variant?: "info" | "success" | "warning" | "error"
     duration?: number
   }): void
+  resumeAfterDenial?(sessionID: string, reason: string): void
 }
 
 export interface ReviewerClient {

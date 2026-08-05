@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { createStableRuntime, protocolForVersion } from "../src/stable.ts"
 
 function client() {
+  const prompts: unknown[] = []
   const sessions = new Map([
     ["ses_child", { id: "ses_child", parentID: "ses_root" }],
     ["ses_root", { id: "ses_root" }],
@@ -34,12 +35,17 @@ function client() {
           },
         ],
       }),
+      promptAsync: async (input: unknown) => {
+        prompts.push(input)
+        return { data: undefined }
+      },
     },
     permission: {
       list: async () => ({ data: pending }),
       reply: async () => ({ data: true }),
     },
     tui: { showToast: async () => ({ data: true }) },
+    prompts,
   }
 }
 
@@ -59,6 +65,28 @@ describe("createStableRuntime", () => {
     )
 
     expect(await runtime.version()).toBeUndefined()
+    runtime.dispose()
+  })
+
+  test("resumes the session with safe continuation guidance after a denial", async () => {
+    const injected = client()
+    const runtime = createStableRuntime(injected, { model: "openai/gpt-5.6-luna" }, "/repo")
+
+    runtime.context.resumeAfterDenial?.("ses_child", "The user explicitly prohibited this action.")
+    await Promise.resolve()
+
+    expect(injected.prompts).toEqual([
+      {
+        path: { id: "ses_child" },
+        query: { directory: "/repo" },
+        body: {
+          parts: [{
+            type: "text",
+            text: expect.stringContaining("Do not retry it"),
+          }],
+        },
+      },
+    ])
     runtime.dispose()
   })
 
