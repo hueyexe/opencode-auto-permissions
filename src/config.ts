@@ -9,6 +9,7 @@ export interface Config {
   timeoutMs: number
   userMessageCount: number
   shadow: boolean
+  runtime: "auto" | "stable" | "v2"
 }
 
 export function parseConfig(options: Readonly<Record<string, unknown>>): Config {
@@ -38,7 +39,14 @@ export function parseConfig(options: Readonly<Record<string, unknown>>): Config 
       "userMessageCount",
     ),
     shadow: options.shadow === true,
+    runtime: parseRuntime(options.runtime),
   }
+}
+
+function parseRuntime(value: unknown): Config["runtime"] {
+  if (value === undefined) return "auto"
+  if (value === "auto" || value === "stable" || value === "v2") return value
+  throw new Error('Auto Permissions runtime must be "auto", "stable", or "v2"')
 }
 
 function boundedInteger(

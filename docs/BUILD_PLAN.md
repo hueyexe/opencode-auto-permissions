@@ -22,7 +22,8 @@ hard-coded as a runtime default, fallback, or provider dependency.
 
 ### Initial release
 
-- OpenCode V2 beta interactive TUI.
+- Stable OpenCode interactive TUI, verified on `1.18.12`.
+- OpenCode V2 beta interactive TUI through its V2 TUI plugin adapter.
 - Shell permissions.
 - External-directory permissions.
 - Explicit user boundaries from recent conversation context.
@@ -33,16 +34,16 @@ hard-coded as a runtime default, fallback, or provider dependency.
 
 ### Not in the initial release
 
-- OpenCode V1 compatibility.
 - Headless automatic review for `opencode run`.
-- Desktop or web clients without the V2 TUI plugin runtime.
+- Desktop or web clients without a verified permission-event integration.
 - MCP-specific policy beyond permissions OpenCode already surfaces.
 - Production deploy authorization or organization policy management.
 - Persistent learning from prior sessions.
 - Telemetry.
 
 Headless use must fail closed: the installed OpenCode permission rules still
-produce `ask`, and without the TUI reviewer no action is auto-approved.
+produce `ask`, and without a verified reviewer adapter no action is
+auto-approved.
 
 ## 3. UX Contract
 
@@ -143,7 +144,7 @@ script. It must explain every file it changes and preserve unrelated config.
 - It is already supported by OpenCode's Bun-backed package resolver.
 - Users do not need npm credentials or a global package install.
 - A tag can pin an immutable reviewed version.
-- The same package can expose a V2 TUI entrypoint through `./tui`.
+- The same package exposes a stable/server entrypoint and a V2 TUI entrypoint.
 - It avoids introducing a second distribution channel before the V2 API is
   stable.
 
@@ -153,7 +154,9 @@ The installer asks for one required value: an exact OpenCode model reference
 in `provider/model` form. It validates that reference against OpenCode's model
 catalog before writing config.
 
-It adds the tagged Git package to V2's TUI config at
+For stable OpenCode, the installer adds the package and model option to the
+normal `plugin` configuration. For V2, it additionally adds the tagged Git
+package to V2's TUI config at
 `~/.config/opencode/cli.json`:
 
 ```json
@@ -187,7 +190,7 @@ the boundary apply to custom agents without relying on plugin transform order.
 
 The installer must:
 
-1. Verify an explicitly supported OpenCode V2 beta version.
+1. Detect and verify an explicitly supported OpenCode runtime version.
 2. Refuse to overwrite malformed config.
 3. Preserve comments and unrelated fields where JSONC is in use.
 4. Avoid duplicate package entries and permission rules.
@@ -283,34 +286,34 @@ opencode-auto-permissions/
 Start with this flat module layout. Split modules further only when a concrete
 reuse or complexity boundary appears.
 
-The package exports a TUI plugin:
+The package exports server and TUI adapters:
 
 ```json
 {
   "name": "opencode-auto-permissions",
   "type": "module",
   "exports": {
+    ".": "./dist/server.js",
+    "./server": "./dist/server.js",
     "./tui": "./dist/tui.js"
   }
 }
 ```
 
-The tagged commit contains the built `dist/tui.js`; installation must not
+The tagged commit contains the built `dist/server.js` and `dist/tui.js`; installation must not
 depend on a development toolchain running successfully on the user's machine.
 CI verifies that `dist` exactly matches source.
 
-### Why the reviewer lives in the TUI plugin
+### Runtime adapters
 
-Current V2 server plugins can observe permission events but do not expose a
-permission reply domain. The V2 TUI plugin receives a full client, including:
+Stable OpenCode is handled by the server adapter using stable
+`permission.asked`/`permission.updated` events and the stable reply endpoint.
+V2 is handled by the TUI adapter using `permission.v2.asked` and the
+session-scoped V2 reply endpoint. Runtime ownership is selected automatically
+from the OpenCode version; users do not select a mode.
 
-- `permission.reply`;
-- `generate.text` for stateless model calls;
-- session and message data;
-- TUI slots, dialogs, toasts, commands, and attention notifications.
-
-This supports the complete interactive review loop without private server
-URLs or copied plugin files.
+Both adapters normalize into one reviewer pipeline and use the same hidden,
+deny-all reviewer agent.
 
 ### Shared state
 
@@ -328,7 +331,7 @@ Nothing is persisted in the first release except plugin configuration.
 
 ## 7. Permission Review Pipeline
 
-For every supported `permission.asked` event:
+For every supported stable or V2 permission event:
 
 1. Validate the event schema.
 2. Deduplicate by request ID.
@@ -337,8 +340,9 @@ For every supported `permission.asked` event:
 5. Resolve the exact tool call through `source.messageID` and `source.callID`.
 6. Collect only relevant recent human messages from the root session.
 7. Apply deterministic policy.
-8. If policy abstains, call the configured model through V2 `generate.text`.
-9. Strictly parse the model result.
+8. If policy abstains, create an isolated hidden reviewer session and invoke
+   the configured model with OpenCode's `json_schema` output format.
+9. Validate only `info.structured`; never parse fallback text.
 10. Recheck that the request is still pending.
 11. Reply `once`, reply `reject` with corrective feedback, or abstain.
 12. Record a redacted decision and latency.
@@ -401,11 +405,13 @@ aliases, pricing assumptions, or fallback models.
 The configured model must support ordinary text generation. Models that fail
 strict output validation simply cause manual approval.
 
-### Stateless request
+### Isolated structured request
 
-Use V2's stateless `generate.text` endpoint. This avoids creating visible or
-hidden sessions, gives the reviewer no tools, and prevents it from inheriting
-project instructions or assistant rationales.
+The published V2 beta does not register its stateless generation endpoint, so
+the compatibility layer creates a short-lived hidden reviewer session in a
+plugin-owned temporary location. The session denies every ordinary tool,
+re-allows only OpenCode's synthetic `StructuredOutput` tool, replaces assembled
+system context with the fixed reviewer policy, and is deleted in `finally`.
 
 The prompt contains:
 
@@ -414,7 +420,8 @@ The prompt contains:
 3. A JSON-serialized request containing the exact action, all resources, exact
    tool input, working location, relevant human messages, and prior explicit
    human decisions when provenance is certain.
-4. A strict JSON output contract.
+4. A JSON Schema output contract supplied through OpenCode's structured-output
+   API, not repeated in prompt prose.
 
 Expected output:
 
@@ -432,8 +439,8 @@ keys, invalid reason codes, oversized reasons, and any decision other than
 
 ### Runtime limits
 
-- Target timeout: 2 seconds.
-- No interactive retry.
+- Current compatibility timeout: 8 seconds, covering measured cold beta startup.
+- One OpenCode schema-validation retry is requested; no custom model retry loop.
 - Small output limit where the endpoint/model supports it.
 - Abort immediately when the permission is resolved elsewhere.
 - No verdict caching in the first release.
@@ -506,8 +513,8 @@ the reviewer core.
 
 ### End-to-end tests
 
-Run against the exact supported V2 binary on Linux first, then macOS and
-Windows before the first stable tag:
+Run against stable OpenCode and the exact supported V2 binary on Linux first,
+then macOS and Windows before the first stable tag:
 
 1. Fresh config and clean repository.
 2. Install through `INSTALL.md` instructions.
@@ -550,16 +557,16 @@ user action.
 
 ## 12. Milestones
 
-### Milestone 0: V2 compatibility spike
+### Milestone 0: Stable and V2 compatibility spike
 
 Deliverables:
 
-- Pin the exact OpenCode V2 beta and plugin packages.
+- Pin the exact OpenCode V2 beta and plugin packages; verify stable `1.18.12`.
 - Prove a Git-backed `./tui` package loads with options.
 - Prove receipt of `permission.asked` and cancellation on
   `permission.replied`.
-- Prove `generate.text` uses the selected model without mutating session
-  history.
+- Prove the isolated reviewer session uses the selected model, receives no
+  ambient coding-agent context, and is deleted after each review.
 - Prove `permission.reply` allow, reject-with-feedback, and lost-race behavior.
 - Verify exact tool input lookup through message ID and call ID.
 - Measure native prompt flicker and Luna latency.
@@ -574,7 +581,7 @@ Deliverables:
 
 - TypeScript, formatter, lint, typecheck, and test configuration.
 - Pinned development dependencies.
-- `./tui` export and reproducible `dist/tui.js` build.
+- `./server` and `./tui` exports with reproducible bundled builds.
 - MIT license, contributing guide, security policy, and changelog.
 - CI for lint, typecheck, tests, build reproducibility, and package smoke test.
 
@@ -632,8 +639,8 @@ Deliverables:
 - Supported-version matrix and troubleshooting guide.
 - Verification command and expected status output.
 
-Exit criterion: a user with a fresh OpenCode V2 install needs to choose only a
-model and restart.
+Exit criterion: a user with a fresh supported OpenCode install needs to choose
+only a model and restart.
 
 ### Milestone 6: Beta release
 

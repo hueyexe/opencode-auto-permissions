@@ -2,6 +2,8 @@ import type { Config, Plugin, PluginModule } from "@opencode-ai/plugin"
 import type { Plugin as V2Plugin } from "@opencode-ai/plugin/v2/promise"
 import { REVIEWER_AGENT_ID, REVIEWER_SYSTEM_PROMPT } from "./agent.ts"
 import { parseConfig } from "./config.ts"
+import { installReviewer } from "./reviewer.ts"
+import { createStableRuntime, protocolForVersion } from "./stable.ts"
 
 const v2Plugin = {
   id: "opencode.auto-permissions.server",
@@ -21,9 +23,22 @@ const v2Plugin = {
   },
 } satisfies V2Plugin
 
-const legacyPlugin: Plugin = async (_input, options = {}) => {
+const legacyPlugin: Plugin = async (input, options = {}) => {
   const config = parseConfig(options)
   const reviewerSessions = new Map<string, ReturnType<typeof setTimeout>>()
+  const stable = createStableRuntime(input.client, options, input.directory)
+  let stopStableReviewer: (() => void) | undefined
+  let ownership: Promise<boolean> | undefined
+  const ownsStable = () =>
+    (ownership ??= (async () => {
+      if (config.runtime !== "auto") return config.runtime === "stable"
+      return protocolForVersion(await stable.version()) === "stable"
+    })())
+  const startStableReviewer = async () => {
+    if (!(await ownsStable())) return false
+    stopStableReviewer ??= installReviewer(stable.context, { protocols: ["stable"] })
+    return true
+  }
   return {
     async config(value: Config) {
       value.agent ??= {}
@@ -53,7 +68,13 @@ const legacyPlugin: Plugin = async (_input, options = {}) => {
       if (!input.sessionID || !reviewerSessions.has(input.sessionID)) return
       output.system.splice(0, output.system.length, REVIEWER_SYSTEM_PROMPT)
     },
+    async event(input) {
+      if (!(await startStableReviewer())) return
+      stable.emit(input.event)
+    },
     async dispose() {
+      stopStableReviewer?.()
+      stable.dispose()
       for (const expiry of reviewerSessions.values()) clearTimeout(expiry)
       reviewerSessions.clear()
     },

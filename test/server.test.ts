@@ -1,16 +1,45 @@
 import { describe, expect, test } from "bun:test"
 import server from "../src/server.ts"
+import { REVIEWER_SYSTEM_PROMPT } from "../src/agent.ts"
+
+function pluginInput() {
+  return {
+    directory: "/repo",
+    client: {
+      global: { health: async () => ({ data: { healthy: true, version: "1.18.12" } }) },
+      v2: {},
+      permission: {
+        list: async () => ({ data: [] }),
+        reply: async () => ({ data: true }),
+      },
+      session: {
+        get: async () => ({ data: { id: "ses_root" } }),
+        messages: async () => ({ data: [] }),
+        create: async () => ({ data: { id: "ses_review" } }),
+        prompt: async () => ({
+          data: { info: { structured: { decision: "ask", reasonCode: "test", reason: "Test." } } },
+        }),
+        delete: async () => ({ data: true }),
+      },
+      app: {
+        agents: async () => ({ data: [] }),
+        skills: async () => ({ data: [] }),
+      },
+      tui: { showToast: async () => ({ data: true }) },
+    },
+  } as never
+}
 
 describe("server plugin", () => {
   test("registers the hidden reviewer agent through the beta config hook", async () => {
     const factory = server.server
-    const hooks = await factory({} as never, { model: "kiro/gpt-5.6-luna" })
+    const hooks = await factory(pluginInput(), { model: "kiro-openai/gpt-5.6-luna" })
     const config: any = {}
 
     await hooks.config?.(config)
 
     expect(config.agent["auto-permissions-reviewer"]).toMatchObject({
-      model: "kiro/gpt-5.6-luna",
+      model: "kiro-openai/gpt-5.6-luna",
       mode: "subagent",
       hidden: true,
       steps: 1,
@@ -20,7 +49,7 @@ describe("server plugin", () => {
   })
 
   test("strips ambient context only for the hidden reviewer request", async () => {
-    const hooks = await server.server({} as never, { model: "kiro/gpt-5.6-luna" })
+    const hooks = await server.server(pluginInput(), { model: "kiro-openai/gpt-5.6-luna" })
     const reviewerSystem = ["large global prompt", "skills", "mcp"]
     const regularSystem = ["regular prompt"]
 
@@ -28,7 +57,7 @@ describe("server plugin", () => {
       {
         sessionID: "ses_review",
         agent: "auto-permissions-reviewer",
-        model: { providerID: "kiro", modelID: "gpt-5.6-luna" },
+        model: { providerID: "kiro-openai", modelID: "gpt-5.6-luna" },
       },
       {} as never,
     )
@@ -46,8 +75,7 @@ describe("server plugin", () => {
       { system: regularSystem },
     )
 
-    expect(reviewerSystem).toHaveLength(1)
-    expect(reviewerSystem[0]).toContain("automatic permission reviewer")
+    expect(reviewerSystem).toEqual([REVIEWER_SYSTEM_PROMPT])
     expect(retrySystem).toEqual(reviewerSystem)
     expect(regularSystem).toEqual(["regular prompt"])
     await hooks.dispose?.()

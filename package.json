@@ -22,6 +22,8 @@
     "check": "tsc --noEmit",
     "test": "bun test",
     "test:coverage": "bun test --coverage",
+    "test:stable": "bun run scripts/test-runtime.ts stable",
+    "test:v2": "bun run scripts/test-runtime.ts v2",
     "verify": "bun run check && bun run test && bun run build && bun run test:package",
     "test:package": "bun test test/package.test.ts"
   },
@@ -43,6 +45,7 @@
     "@opentui/keymap": "0.4.5",
     "@opentui/solid": "0.4.5",
     "@types/bun": "1.3.14",
+    "jsonc-parser": "3.3.1",
     "opencode-ai": "0.0.0-beta-202608040144",
     "typescript": "5.9.3"
   }

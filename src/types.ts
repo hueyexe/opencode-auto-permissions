@@ -1,14 +1,18 @@
 import type {
   ModelRef,
-  PermissionV2Asked,
-  PermissionV2Replied,
-  SessionMessage,
 } from "@opencode-ai/sdk/v2"
 
-export type PermissionRequest = PermissionV2Asked["data"]
-export type PermissionAskedEvent = PermissionV2Asked
-export type PermissionRepliedEvent = PermissionV2Replied
 export type ReviewModel = ModelRef
+export type PermissionProtocol = "stable" | "v2"
+
+export interface PermissionRequest {
+  id: string
+  sessionID: string
+  action: string
+  resources: string[]
+  source?: { type: "tool"; messageID: string; callID: string }
+  protocol: PermissionProtocol
+}
 
 export type Decision =
   | { kind: "allow"; reasonCode: string; reason: string }
@@ -29,11 +33,11 @@ export interface ReviewInput {
 }
 
 export interface SessionData {
-  root(sessionID: string): string
+  root(sessionID: string): string | Promise<string>
   get(sessionID: string): { id: string; parentID?: string } | undefined
   message: {
-    list(sessionID: string): SessionMessage[]
-    get(sessionID: string, messageID: string): SessionMessage | undefined
+    list(sessionID: string): unknown[]
+    get(sessionID: string, messageID: string): unknown
     sync(sessionID: string): Promise<void>
   }
   permission: {
@@ -75,5 +79,6 @@ export interface ReviewerClient {
     requestID: string
     reply: "once" | "reject"
     message?: string
+    protocol: PermissionProtocol
   }): Promise<"replied" | "not_found">
 }

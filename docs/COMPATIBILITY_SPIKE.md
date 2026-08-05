@@ -1,11 +1,14 @@
-# OpenCode V2 Compatibility Spike
+# OpenCode Stable And V2 Compatibility Spike
 
 Verified on 4 August 2026 against:
 
 - OpenCode `0.0.0-beta-202608040144`
 - `@opencode-ai/plugin@0.0.0-beta-202608040144`
 - `@opencode-ai/sdk@0.0.0-beta-202608040144`
-- Reviewer model `kiro/gpt-5.6-luna`
+- Reviewer model `kiro-openai/gpt-5.6-luna`
+
+Stable compatibility was additionally verified on 5 August 2026 against
+OpenCode `1.18.12`.
 
 ## Proven
 
@@ -29,6 +32,13 @@ Verified on 4 August 2026 against:
   `404` as a benign lost race.
 - Deterministic policy handles routine local commands and hard-risk categories
   before model review.
+- Stable `permission.asked`/`permission.updated` and V2
+  `permission.v2.asked` protocols are selected automatically by event
+  namespace; no user-facing runtime flag is required.
+- A live stable shell turn logged an `ask`, completed `git status --short`
+  without human input, and ended with zero pending permissions.
+- A live stable Luna review blocked a prohibited shell command and ended with
+  zero pending permissions.
 
 ## Measurements
 
@@ -64,7 +74,7 @@ target sub-1.5-second P95 UX.
   reports structured-output failures with `retries: 0`. The plugin fails to
   manual approval rather than parsing malformed model text.
 
-## Remaining Milestone 0 Gap
+## Remaining V2 Milestone 0 Gap
 
 The model lifecycle and permission reply lifecycle have each passed against the
 real beta server. The packaged TUI entrypoint imports successfully and its

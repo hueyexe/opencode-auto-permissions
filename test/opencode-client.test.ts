@@ -1,10 +1,10 @@
 import { describe, expect, test } from "bun:test"
-import { BetaClient } from "../src/beta-client.ts"
+import { OpenCodeClientAdapter } from "../src/opencode-client.ts"
 
-describe("BetaClient", () => {
+describe("OpenCodeClientAdapter", () => {
   test("prewarms the reviewer location without invoking a model", async () => {
     const calls: string[] = []
-    const client = new BetaClient({
+    const client = new OpenCodeClientAdapter({
       app: {
         agents: async () => calls.push("agents"),
         skills: async () => calls.push("skills"),
@@ -18,7 +18,7 @@ describe("BetaClient", () => {
 
   test("uses an isolated deny-all reviewer session and deletes it", async () => {
     const calls: Array<{ method: string; input: any }> = []
-    const client = new BetaClient({
+    const client = new OpenCodeClientAdapter({
       session: {
         async create(input: unknown) {
           calls.push({ method: "create", input })
@@ -73,7 +73,7 @@ describe("BetaClient", () => {
 
   test("deletes the reviewer session when generation fails", async () => {
     let deleted = false
-    const client = new BetaClient({
+    const client = new OpenCodeClientAdapter({
       session: {
         create: async () => ({ data: { id: "ses_review" } }),
         prompt: async () => {
@@ -104,7 +104,7 @@ describe("BetaClient", () => {
         throw { status: 404 }
       },
     }
-    const client = new BetaClient({
+    const client = new OpenCodeClientAdapter({
       v2: {
         session: {
           permission,
@@ -113,13 +113,13 @@ describe("BetaClient", () => {
     })
 
     await expect(
-      client.reply({ sessionID: "ses_1", requestID: "per_1", reply: "once" }),
+      client.reply({ sessionID: "ses_1", requestID: "per_1", reply: "once", protocol: "v2" }),
     ).resolves.toBe("not_found")
   })
 
   test("prefers the V2 session-scoped permission endpoint", async () => {
     const calls: string[] = []
-    const client = new BetaClient({
+    const client = new OpenCodeClientAdapter({
       permission: {
         reply: async () => calls.push("legacy"),
       },
@@ -132,8 +132,28 @@ describe("BetaClient", () => {
       },
     })
 
-    await client.reply({ sessionID: "ses_1", requestID: "per_1", reply: "once" })
+    await client.reply({ sessionID: "ses_1", requestID: "per_1", reply: "once", protocol: "v2" })
 
     expect(calls).toEqual(["v2"])
+  })
+
+  test("uses the stable permission endpoint for stable events", async () => {
+    const calls: string[] = []
+    const client = new OpenCodeClientAdapter({
+      permission: {
+        reply: async () => calls.push("stable"),
+      },
+      v2: {
+        session: {
+          permission: {
+            reply: async () => calls.push("v2"),
+          },
+        },
+      },
+    })
+
+    await client.reply({ sessionID: "ses_1", requestID: "per_1", reply: "once", protocol: "stable" })
+
+    expect(calls).toEqual(["stable"])
   })
 })

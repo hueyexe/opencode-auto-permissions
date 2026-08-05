@@ -94,13 +94,14 @@ function harness(options: Record<string, unknown> = { model: "example/luna-5.6" 
   return { context, client, requests, replies, toasts, emit }
 }
 
-function request(command: string): PermissionRequest {
+function request(command: string, protocol: PermissionRequest["protocol"] = "v2"): PermissionRequest {
   return {
     id: "per_1",
     sessionID: "ses_root",
     action: "shell",
     resources: [command],
     source: { type: "tool", messageID: "msg_assistant", callID: "call_1" },
+    protocol,
   }
 }
 
@@ -117,7 +118,9 @@ describe("installReviewer", () => {
     app.emit("permission.v2.asked", app.requests[0])
     await settle()
 
-    expect(app.replies).toEqual([{ sessionID: "ses_root", requestID: "per_1", reply: "once" }])
+    expect(app.replies).toEqual([
+      { sessionID: "ses_root", requestID: "per_1", reply: "once", protocol: "v2" },
+    ])
     expect(app.toasts).toEqual([])
     dispose()
   })
@@ -182,6 +185,29 @@ describe("installReviewer", () => {
 
     expect(decisions).toEqual(["allow"])
     expect(app.replies).toEqual([])
+    dispose()
+  })
+
+  test("auto-detects the stable permission event protocol", async () => {
+    const app = harness()
+    const stable = request("git status", "stable")
+    app.requests.push(stable)
+    const dispose = installReviewer(app.context, { client: app.client })
+
+    app.emit("permission.asked", {
+      id: stable.id,
+      sessionID: stable.sessionID,
+      permission: "bash",
+      patterns: stable.resources,
+      metadata: {},
+      always: [],
+      tool: { messageID: "msg_assistant", callID: "call_1" },
+    })
+    await settle()
+
+    expect(app.replies).toEqual([
+      { sessionID: "ses_root", requestID: "per_1", reply: "once", protocol: "stable" },
+    ])
     dispose()
   })
 })

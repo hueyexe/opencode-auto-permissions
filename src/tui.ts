@@ -7,14 +7,15 @@ export const id = "opencode.auto-permissions"
 const plugin = {
   id,
   setup(context: RuntimeContext) {
-    return installReviewer(fromCurrentContext(context))
+    return installReviewer(fromCurrentContext(context), { protocols: ["v2"] })
   },
 }
 
 export default plugin
 
 export const tui: TuiPlugin = async (api, options) => {
-  installReviewer(fromLegacyApi(api, options ?? {}))
+  const dispose = installReviewer(fromLegacyApi(api, options ?? {}), { protocols: ["v2"] })
+  api.lifecycle.onDispose(dispose)
 }
 
 function fromCurrentContext(context: RuntimeContext & { ui?: any }): RuntimeContext {

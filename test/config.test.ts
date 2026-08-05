@@ -9,6 +9,7 @@ describe("parseConfig", () => {
       timeoutMs: 8_000,
       userMessageCount: 4,
       shadow: false,
+      runtime: "auto",
     })
   })
 
@@ -27,5 +28,11 @@ describe("parseConfig", () => {
   test("rejects out-of-range runtime options", () => {
     expect(() => parseConfig({ model: "a/b", timeoutMs: 99 })).toThrow(/timeoutMs/)
     expect(() => parseConfig({ model: "a/b", userMessageCount: 21 })).toThrow(/userMessageCount/)
+  })
+
+  test("supports a diagnostics-only runtime override", () => {
+    expect(parseConfig({ model: "a/b", runtime: "stable" }).runtime).toBe("stable")
+    expect(parseConfig({ model: "a/b", runtime: "v2" }).runtime).toBe("v2")
+    expect(() => parseConfig({ model: "a/b", runtime: "other" })).toThrow(/runtime/)
   })
 })

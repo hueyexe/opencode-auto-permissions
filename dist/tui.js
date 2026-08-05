@@ -37,7 +37,7 @@ Decision rules:
 
 Submit the final decision through the StructuredOutput tool.`;
 
-// src/beta-client.ts
+// src/opencode-client.ts
 import { mkdir } from "fs/promises";
 import { tmpdir } from "os";
 import { join } from "path";
@@ -47,7 +47,7 @@ var REVIEWER_PERMISSIONS = [
 ];
 var REVIEWER_DIRECTORY = join(tmpdir(), "opencode-auto-permissions", "reviewer");
 
-class BetaClient {
+class OpenCodeClientAdapter {
   client;
   constructor(client) {
     this.client = client;
@@ -128,7 +128,7 @@ class BetaClient {
   async reply(input) {
     try {
       const scoped = this.client.v2?.session?.permission;
-      if (typeof scoped?.reply === "function") {
+      if (input.protocol === "v2" && typeof scoped?.reply === "function") {
         const result2 = await scoped.reply(input);
         throwForResultError(result2);
         return "replied";
@@ -208,8 +208,16 @@ function parseConfig(options) {
     modelLabel: modelValue,
     timeoutMs: boundedInteger(options.timeoutMs, DEFAULT_TIMEOUT_MS, 100, 30000, "timeoutMs"),
     userMessageCount: boundedInteger(options.userMessageCount, DEFAULT_USER_MESSAGE_COUNT, 1, 20, "userMessageCount"),
-    shadow: options.shadow === true
+    shadow: options.shadow === true,
+    runtime: parseRuntime(options.runtime)
   };
+}
+function parseRuntime(value) {
+  if (value === undefined)
+    return "auto";
+  if (value === "auto" || value === "stable" || value === "v2")
+    return value;
+  throw new Error('Auto Permissions runtime must be "auto", "stable", or "v2"');
 }
 function boundedInteger(value, fallback, minimum, maximum, name) {
   if (value === undefined)
@@ -223,29 +231,60 @@ function boundedInteger(value, fallback, minimum, maximum, name) {
 // src/context.ts
 var MAX_MESSAGE_CHARS = 4000;
 function normalizeAskedEvent(event) {
-  if (!isRecord2(event) || event.type !== "permission.v2.asked" || !isRecord2(event.data))
+  if (!isRecord2(event))
     return null;
-  const data = event.data;
-  if (typeof data.id !== "string" || typeof data.sessionID !== "string" || typeof data.action !== "string" || !Array.isArray(data.resources) || !data.resources.every((item) => typeof item === "string")) {
-    return null;
+  const data = payload(event);
+  if (event.type === "permission.v2.asked" || event.type === "permission.asked" && validRequest(data, "action", "resources")) {
+    if (!validRequest(data, "action", "resources"))
+      return null;
+    return {
+      id: data.id,
+      sessionID: data.sessionID,
+      action: data.action,
+      resources: [...data.resources],
+      ...validTool(data.source) ? { source: data.source } : {},
+      protocol: "v2"
+    };
   }
-  return event;
+  if (event.type !== "permission.asked" && event.type !== "permission.updated")
+    return null;
+  if (!data || typeof data.id !== "string" || typeof data.sessionID !== "string")
+    return null;
+  const action = typeof data.permission === "string" ? data.permission : data.type;
+  const rawResources = data.patterns ?? data.pattern;
+  const resources = Array.isArray(rawResources) ? rawResources : typeof rawResources === "string" ? [rawResources] : [];
+  if (typeof action !== "string" || resources.length === 0 || !resources.every((item) => typeof item === "string"))
+    return null;
+  const tool = validTool(data.tool) ? data.tool : typeof data.messageID === "string" && typeof data.callID === "string" ? { type: "tool", messageID: data.messageID, callID: data.callID } : undefined;
+  return {
+    id: data.id,
+    sessionID: data.sessionID,
+    action,
+    resources,
+    ...tool ? { source: tool } : {},
+    protocol: "stable"
+  };
 }
 function normalizeRepliedEvent(event) {
-  if (!isRecord2(event) || event.type !== "permission.v2.replied" || !isRecord2(event.data))
+  if (!isRecord2(event) || !["permission.v2.replied", "permission.replied"].includes(String(event.type)))
     return null;
-  if (typeof event.data.sessionID !== "string" || typeof event.data.requestID !== "string")
+  const data = payload(event);
+  const requestID = data?.requestID ?? data?.permissionID;
+  if (!isRecord2(data) || typeof data.sessionID !== "string" || typeof requestID !== "string")
     return null;
-  return { sessionID: event.data.sessionID, requestID: event.data.requestID };
+  return { sessionID: data.sessionID, requestID };
 }
 async function collectReviewInput(context, request, userMessageCount) {
-  const rootSessionID = context.data.session.root(request.sessionID);
+  const rootSessionID = await context.data.session.root(request.sessionID);
   await Promise.all([
     context.data.session.message.sync(rootSessionID),
     request.sessionID === rootSessionID ? Promise.resolve() : context.data.session.message.sync(request.sessionID)
   ]);
   const messages = context.data.session.message.list(rootSessionID);
-  const userMessages = messages.filter((message) => message.type === "user").map((message) => message.text.slice(0, MAX_MESSAGE_CHARS)).slice(-userMessageCount);
+  const userMessages = messages.flatMap((message) => {
+    const text = userText(message);
+    return text === undefined ? [] : [text.slice(0, MAX_MESSAGE_CHARS)];
+  }).slice(-userMessageCount);
   const currentDirectory = directory(context);
   return {
     request: {
@@ -266,18 +305,45 @@ async function isRequestPending(context, request) {
 }
 function findToolInput(context, sessionID, messageID, callID) {
   const message = context.data.session.message.get(sessionID, messageID);
-  if (message?.type !== "assistant")
+  if (!isRecord2(message))
     return;
-  const tool = message.content.find((item) => item.type === "tool" && item.id === callID);
-  if (!tool || tool.type !== "tool")
-    return;
-  return tool.state.input;
+  if (message.type === "assistant" && Array.isArray(message.content)) {
+    const tool = message.content.find((item) => isRecord2(item) && item.type === "tool" && (item.id === callID || item.callID === callID));
+    if (isRecord2(tool) && isRecord2(tool.state))
+      return tool.state.input;
+  }
+  if (isRecord2(message.info) && message.info.role === "assistant" && Array.isArray(message.parts)) {
+    const tool = message.parts.find((part) => isRecord2(part) && part.type === "tool" && (part.callID === callID || part.id === callID));
+    if (isRecord2(tool) && isRecord2(tool.state))
+      return tool.state.input;
+  }
+  return;
 }
 function directory(context) {
   return context.location?.directory ?? context.data.location?.default().directory;
 }
 function isRecord2(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function payload(event) {
+  return isRecord2(event.data) ? event.data : isRecord2(event.properties) ? event.properties : null;
+}
+function validRequest(data, actionKey, resourcesKey) {
+  return Boolean(data && typeof data.id === "string" && typeof data.sessionID === "string" && typeof data[actionKey] === "string" && Array.isArray(data[resourcesKey]) && data[resourcesKey].every((item) => typeof item === "string"));
+}
+function validTool(value) {
+  return Boolean(isRecord2(value) && (value.type === undefined || value.type === "tool") && typeof value.messageID === "string" && typeof value.callID === "string");
+}
+function userText(message) {
+  if (!isRecord2(message))
+    return;
+  if (message.type === "user" && typeof message.text === "string")
+    return message.text;
+  if (!isRecord2(message.info) || message.info.role !== "user" || !Array.isArray(message.parts))
+    return;
+  const text = message.parts.filter((part) => isRecord2(part) && part.type === "text" && typeof part.text === "string" && part.synthetic !== true && part.ignored !== true).map((part) => part.text).join(`
+`);
+  return text || undefined;
 }
 
 // src/policy.ts
@@ -382,8 +448,9 @@ function isRecord3(value) {
 var SUPPORTED_ACTIONS = new Set(["shell", "bash", "external_directory"]);
 function installReviewer(context, overrides = {}) {
   const config = parseConfig(context.options);
-  const client = overrides.client ?? new BetaClient(context.client);
+  const client = overrides.client ?? new OpenCodeClientAdapter(context.client);
   const inFlight = new Map;
+  const protocols = new Set(overrides.protocols ?? ["stable", "v2"]);
   client.prewarm?.().catch(() => {
     return;
   });
@@ -392,16 +459,21 @@ function installReviewer(context, overrides = {}) {
     if (reply)
       inFlight.get(reply.requestID)?.abort("permission resolved");
   });
+  const offStableReplied = context.data.on("permission.replied", (event) => {
+    const reply = normalizeRepliedEvent(event);
+    if (reply)
+      inFlight.get(reply.requestID)?.abort("permission resolved");
+  });
   const offAsked = context.data.on("permission.v2.asked", (event) => {
     const asked = normalizeAskedEvent(event);
-    if (!asked || !SUPPORTED_ACTIONS.has(asked.data.action) || inFlight.has(asked.data.id))
+    if (!asked || !protocols.has(asked.protocol) || !SUPPORTED_ACTIONS.has(asked.action) || inFlight.has(asked.id))
       return;
     const controller = new AbortController;
-    inFlight.set(asked.data.id, controller);
-    reviewAndReply(context, client, config, asked.data, controller.signal, overrides).catch((error) => {
+    inFlight.set(asked.id, controller);
+    reviewAndReply(context, client, config, asked, controller.signal, overrides).catch((error) => {
       if (controller.signal.aborted)
         return;
-      overrides.onFailure?.(asked.data, error);
+      overrides.onFailure?.(asked, error);
       context.showToast?.({
         title: "Auto Permissions unavailable",
         message: "Manual approval required.",
@@ -409,13 +481,36 @@ function installReviewer(context, overrides = {}) {
         duration: 4000
       });
     }).finally(() => {
-      if (inFlight.get(asked.data.id) === controller)
-        inFlight.delete(asked.data.id);
+      if (inFlight.get(asked.id) === controller)
+        inFlight.delete(asked.id);
+    });
+  });
+  const offStableAsked = context.data.on("permission.asked", (event) => {
+    const asked = normalizeAskedEvent(event);
+    if (!asked || !protocols.has(asked.protocol) || !SUPPORTED_ACTIONS.has(asked.action) || inFlight.has(asked.id))
+      return;
+    const controller = new AbortController;
+    inFlight.set(asked.id, controller);
+    reviewAndReply(context, client, config, asked, controller.signal, overrides).catch((error) => {
+      if (controller.signal.aborted)
+        return;
+      overrides.onFailure?.(asked, error);
+      context.showToast?.({
+        title: "Auto Permissions unavailable",
+        message: "Manual approval required.",
+        variant: "warning",
+        duration: 4000
+      });
+    }).finally(() => {
+      if (inFlight.get(asked.id) === controller)
+        inFlight.delete(asked.id);
     });
   });
   return () => {
     offAsked();
+    offStableAsked();
     offReplied();
+    offStableReplied();
     for (const controller of inFlight.values())
       controller.abort("plugin disposed");
     inFlight.clear();
@@ -444,14 +539,20 @@ async function reviewAndReply(context, client, config, request, parentSignal, ov
   if (!await isRequestPending(context, request) || parentSignal.aborted)
     return;
   if (decision.kind === "allow") {
-    await client.reply({ sessionID: request.sessionID, requestID: request.id, reply: "once" });
+    await client.reply({
+      sessionID: request.sessionID,
+      requestID: request.id,
+      reply: "once",
+      protocol: request.protocol
+    });
     return;
   }
   await client.reply({
     sessionID: request.sessionID,
     requestID: request.id,
     reply: "reject",
-    message: `Auto Permissions blocked this action: ${decision.reason}`
+    message: `Auto Permissions blocked this action: ${decision.reason}`,
+    protocol: request.protocol
   });
   context.showToast?.({ title: "Blocked", message: decision.reason, variant: "warning", duration: 4000 });
 }
@@ -483,12 +584,13 @@ var id = "opencode.auto-permissions";
 var plugin = {
   id,
   setup(context) {
-    return installReviewer(fromCurrentContext(context));
+    return installReviewer(fromCurrentContext(context), { protocols: ["v2"] });
   }
 };
 var tui_default = plugin;
 var tui = async (api, options) => {
-  installReviewer(fromLegacyApi(api, options ?? {}));
+  const dispose = installReviewer(fromLegacyApi(api, options ?? {}), { protocols: ["v2"] });
+  api.lifecycle.onDispose(dispose);
 };
 function fromCurrentContext(context) {
   if (context.showToast)

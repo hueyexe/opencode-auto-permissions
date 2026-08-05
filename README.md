@@ -10,5 +10,9 @@ mode: routine actions continue automatically, clearly unsafe actions are
 blocked, and only ambiguous decisions are left for manual approval. It is
 model-agnostic; development and initial evaluations will use Luna 5.6.
 
+The plugin automatically supports the stable and V2 permission event
+protocols; users do not need to select a runtime mode.
+
 See the [build plan](docs/BUILD_PLAN.md) for the proposed architecture,
-installation flow, milestones, and release strategy.
+installation flow, milestones, and release strategy. See [testing](docs/TESTING.md)
+for isolated one-command launchers.

@@ -10,7 +10,7 @@ const REVIEWER_PERMISSIONS = [
 ] as const
 const REVIEWER_DIRECTORY = join(tmpdir(), "opencode-auto-permissions", "reviewer")
 
-export class BetaClient implements ReviewerClient {
+export class OpenCodeClientAdapter implements ReviewerClient {
   constructor(private readonly client: any) {}
 
   async prewarm(): Promise<void> {
@@ -103,10 +103,11 @@ export class BetaClient implements ReviewerClient {
     requestID: string
     reply: "once" | "reject"
     message?: string
+    protocol: "stable" | "v2"
   }): Promise<"replied" | "not_found"> {
     try {
       const scoped = this.client.v2?.session?.permission
-      if (typeof scoped?.reply === "function") {
+      if (input.protocol === "v2" && typeof scoped?.reply === "function") {
         const result = await scoped.reply(input)
         throwForResultError(result)
         return "replied"

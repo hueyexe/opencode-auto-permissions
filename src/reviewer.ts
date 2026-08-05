@@ -1,4 +1,4 @@
-import { BetaClient } from "./beta-client.ts"
+import { OpenCodeClientAdapter } from "./opencode-client.ts"
 import { parseConfig, type Config } from "./config.ts"
 import {
   collectReviewInput,
@@ -8,38 +8,51 @@ import {
 } from "./context.ts"
 import { applyDeterministicPolicy } from "./policy.ts"
 import { buildReviewPrompt } from "./prompt.ts"
-import type { Decision, PermissionRequest, ReviewerClient, RuntimeContext } from "./types.ts"
+import type {
+  Decision,
+  PermissionProtocol,
+  PermissionRequest,
+  ReviewerClient,
+  RuntimeContext,
+} from "./types.ts"
 import { parseDecision } from "./verdict.ts"
 
 const SUPPORTED_ACTIONS = new Set(["shell", "bash", "external_directory"])
 
 export interface ReviewerOverrides {
   client?: ReviewerClient
+  protocols?: PermissionProtocol[]
   onDecision?(request: PermissionRequest, decision: Decision, shadow: boolean): void
   onFailure?(request: PermissionRequest, error: unknown): void
 }
 
 export function installReviewer(context: RuntimeContext, overrides: ReviewerOverrides = {}): () => void {
   const config = parseConfig(context.options)
-  const client = overrides.client ?? new BetaClient(context.client)
+  const client = overrides.client ?? new OpenCodeClientAdapter(context.client)
   const inFlight = new Map<string, AbortController>()
+  const protocols = new Set(overrides.protocols ?? ["stable", "v2"])
   void client.prewarm?.().catch(() => undefined)
 
   const offReplied = context.data.on("permission.v2.replied", (event) => {
     const reply = normalizeRepliedEvent(event)
     if (reply) inFlight.get(reply.requestID)?.abort("permission resolved")
   })
+  const offStableReplied = context.data.on("permission.replied", (event) => {
+    const reply = normalizeRepliedEvent(event)
+    if (reply) inFlight.get(reply.requestID)?.abort("permission resolved")
+  })
 
   const offAsked = context.data.on("permission.v2.asked", (event) => {
     const asked = normalizeAskedEvent(event)
-    if (!asked || !SUPPORTED_ACTIONS.has(asked.data.action) || inFlight.has(asked.data.id)) return
+    if (!asked || !protocols.has(asked.protocol) || !SUPPORTED_ACTIONS.has(asked.action) || inFlight.has(asked.id))
+      return
 
     const controller = new AbortController()
-    inFlight.set(asked.data.id, controller)
-    void reviewAndReply(context, client, config, asked.data, controller.signal, overrides)
+    inFlight.set(asked.id, controller)
+    void reviewAndReply(context, client, config, asked, controller.signal, overrides)
       .catch((error) => {
         if (controller.signal.aborted) return
-        overrides.onFailure?.(asked.data, error)
+        overrides.onFailure?.(asked, error)
         context.showToast?.({
           title: "Auto Permissions unavailable",
           message: "Manual approval required.",
@@ -48,13 +61,36 @@ export function installReviewer(context: RuntimeContext, overrides: ReviewerOver
         })
       })
       .finally(() => {
-        if (inFlight.get(asked.data.id) === controller) inFlight.delete(asked.data.id)
+        if (inFlight.get(asked.id) === controller) inFlight.delete(asked.id)
+      })
+  })
+  const offStableAsked = context.data.on("permission.asked", (event) => {
+    const asked = normalizeAskedEvent(event)
+    if (!asked || !protocols.has(asked.protocol) || !SUPPORTED_ACTIONS.has(asked.action) || inFlight.has(asked.id))
+      return
+    const controller = new AbortController()
+    inFlight.set(asked.id, controller)
+    void reviewAndReply(context, client, config, asked, controller.signal, overrides)
+      .catch((error) => {
+        if (controller.signal.aborted) return
+        overrides.onFailure?.(asked, error)
+        context.showToast?.({
+          title: "Auto Permissions unavailable",
+          message: "Manual approval required.",
+          variant: "warning",
+          duration: 4_000,
+        })
+      })
+      .finally(() => {
+        if (inFlight.get(asked.id) === controller) inFlight.delete(asked.id)
       })
   })
 
   return () => {
     offAsked()
+    offStableAsked()
     offReplied()
+    offStableReplied()
     for (const controller of inFlight.values()) controller.abort("plugin disposed")
     inFlight.clear()
   }
@@ -91,7 +127,12 @@ async function reviewAndReply(
   if (!(await isRequestPending(context, request)) || parentSignal.aborted) return
 
   if (decision.kind === "allow") {
-    await client.reply({ sessionID: request.sessionID, requestID: request.id, reply: "once" })
+    await client.reply({
+      sessionID: request.sessionID,
+      requestID: request.id,
+      reply: "once",
+      protocol: request.protocol,
+    })
     return
   }
 
@@ -100,6 +141,7 @@ async function reviewAndReply(
     requestID: request.id,
     reply: "reject",
     message: `Auto Permissions blocked this action: ${decision.reason}`,
+    protocol: request.protocol,
   })
   context.showToast?.({ title: "Blocked", message: decision.reason, variant: "warning", duration: 4_000 })
 }
