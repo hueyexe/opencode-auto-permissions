@@ -3,9 +3,9 @@ import { parseConfig } from "../src/config.ts"
 
 describe("parseConfig", () => {
   test("parses an arbitrary provider/model reference", () => {
-    expect(parseConfig({ model: "example/luna-5.6" })).toEqual({
-      model: { providerID: "example", id: "luna-5.6" },
-      modelLabel: "example/luna-5.6",
+    expect(parseConfig({ model: "openai/gpt-5.6-luna" })).toEqual({
+      model: { providerID: "openai", id: "gpt-5.6-luna" },
+      modelLabel: "openai/gpt-5.6-luna",
       timeoutMs: 8_000,
       userMessageCount: 4,
       shadow: false,
@@ -20,7 +20,7 @@ describe("parseConfig", () => {
     })
   })
 
-  test.each([{}, { model: "luna" }, { model: "/luna" }, { model: "provider/" }])(
+  test.each([{}, { model: "gpt-5.6-luna" }, { model: "/gpt-5.6-luna" }, { model: "provider/" }])(
     "rejects invalid model option %#",
     (options) => expect(() => parseConfig(options)).toThrow(),
   )

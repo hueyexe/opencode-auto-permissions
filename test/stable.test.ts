@@ -54,7 +54,7 @@ describe("createStableRuntime", () => {
   test("does not permanently classify an unavailable version", async () => {
     const runtime = createStableRuntime(
       { ...client(), global: {} },
-      { model: "kiro-openai/gpt-5.6-luna" },
+      { model: "openai/gpt-5.6-luna" },
       "/repo",
     )
 
@@ -63,7 +63,7 @@ describe("createStableRuntime", () => {
   })
 
   test("normalizes legacy permission.updated events and resolves root context", async () => {
-    const runtime = createStableRuntime(client(), { model: "kiro-openai/gpt-5.6-luna" }, "/repo")
+    const runtime = createStableRuntime(client(), { model: "openai/gpt-5.6-luna" }, "/repo")
     const seen: unknown[] = []
     runtime.context.data.on("permission.asked", (event) => seen.push(event))
 
@@ -93,7 +93,7 @@ describe("createStableRuntime", () => {
   })
 
   test("normalizes stable permission replies", () => {
-    const runtime = createStableRuntime(client(), { model: "kiro-openai/gpt-5.6-luna" }, "/repo")
+    const runtime = createStableRuntime(client(), { model: "openai/gpt-5.6-luna" }, "/repo")
     const seen: unknown[] = []
     runtime.context.data.on("permission.replied", (event) => seen.push(event))
 

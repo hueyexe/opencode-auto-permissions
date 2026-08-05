@@ -23,7 +23,7 @@ const stableBinary = Bun.which("opencode", { PATH: stablePath })
 if (runtime === "stable" && !stableBinary) throw new Error("Stable OpenCode is not available outside this repository")
 const binary = runtime === "stable" ? stableBinary! : pinnedBeta
 const expectedVersion = runtime === "stable" ? undefined : "0.0.0-beta-202608040144"
-const model = process.env.AUTO_PERMISSIONS_MODEL ?? "kiro-openai/gpt-5.6-luna"
+const model = process.env.AUTO_PERMISSIONS_MODEL ?? "openai/gpt-5.6-luna"
 const separator = model.indexOf("/")
 if (separator < 1 || separator === model.length - 1) throw new Error(`Invalid reviewer model: ${model}`)
 const providerID = model.slice(0, separator)

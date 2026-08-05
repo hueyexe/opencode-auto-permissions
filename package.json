@@ -1,10 +1,18 @@
 {
   "name": "opencode-auto-permissions",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Automatic, model-driven permission review for OpenCode",
   "type": "module",
   "private": true,
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hueyexe/opencode-auto-permissions.git"
+  },
+  "homepage": "https://github.com/hueyexe/opencode-auto-permissions#readme",
+  "bugs": {
+    "url": "https://github.com/hueyexe/opencode-auto-permissions/issues"
+  },
   "main": "./dist/server.js",
   "exports": {
     ".": "./dist/server.js",
@@ -13,7 +21,6 @@
   },
   "files": [
     "dist",
-    "INSTALL.md",
     "LICENSE",
     "README.md"
   ],

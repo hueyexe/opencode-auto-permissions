@@ -15,7 +15,7 @@ The product contract is:
 6. Ambiguous work keeps OpenCode's native approval prompt.
 7. Reviewer failures always fall back to manual approval.
 
-Luna 5.6 is the development and initial evaluation model. It must not be
+GPT-5.6 Luna is the development and initial evaluation model. It must not be
 hard-coded as a runtime default, fallback, or provider dependency.
 
 ## 2. Scope
@@ -52,7 +52,7 @@ auto-approved.
 Show one quiet footer item:
 
 ```text
-Auto Permissions · Luna 5.6
+Auto Permissions · GPT-5.6 Luna
 ```
 
 Use the configured model's display name. Do not show approval notifications,
@@ -446,13 +446,13 @@ keys, invalid reason codes, oversized reasons, and any decision other than
 - No verdict caching in the first release.
 - No fallback model.
 
-### Luna 5.6 development profile
+### GPT-5.6 Luna development profile
 
-Use Luna 5.6 for prompt iteration, latency measurement, and the initial
+Use GPT-5.6 Luna for prompt iteration, latency measurement, and the initial
 adversarial corpus. Store its exact provider/model ID only in local development
 configuration and evaluation invocation examples, never in runtime defaults.
 
-Before beta release, run the same smoke corpus with at least one non-Luna model
+Before beta release, run the same smoke corpus with at least one non-OpenAI model
 to verify the provider-agnostic contract.
 
 ## 10. OpenCode Compatibility Risks
@@ -597,7 +597,7 @@ Deliverables:
 - Stateless model request and strict verdict parser.
 - Redacted bounded history.
 - Shadow-mode diagnostics.
-- Initial adversarial corpus with Luna 5.6 baselines.
+- Initial adversarial corpus with GPT-5.6 Luna baselines.
 
 Exit criterion: shadow mode processes representative sessions without sending
 permission replies and meets the hard-risk evaluation gate.

@@ -14,7 +14,7 @@ they do not configure the plugin's runtime behavior.
 - Run from this repository.
 - Configure the selected reviewer model in your normal OpenCode config.
 - Override the default model with `AUTO_PERMISSIONS_MODEL=provider/model` if
-  required. The default is `kiro-openai/gpt-5.6-luna`.
+  required. The default is `openai/gpt-5.6-luna`.
 
 ## Test Stable OpenCode
 

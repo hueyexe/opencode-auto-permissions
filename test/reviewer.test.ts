@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { installReviewer } from "../src/reviewer.ts"
 import type { PermissionRequest, ReviewerClient, RuntimeContext } from "../src/types.ts"
 
-function harness(options: Record<string, unknown> = { model: "example/luna-5.6" }) {
+function harness(options: Record<string, unknown> = { model: "openai/gpt-5.6-luna" }) {
   const handlers = new Map<string, Set<(event: unknown) => void>>()
   const requests: PermissionRequest[] = []
   const replies: Parameters<ReviewerClient["reply"]>[0][] = []
@@ -172,7 +172,7 @@ describe("installReviewer", () => {
   })
 
   test("shadow mode records but never replies", async () => {
-    const app = harness({ model: "example/luna-5.6", shadow: true })
+    const app = harness({ model: "openai/gpt-5.6-luna", shadow: true })
     app.requests.push(request("pnpm test"))
     const decisions: string[] = []
     const dispose = installReviewer(app.context, {

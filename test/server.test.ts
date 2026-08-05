@@ -33,13 +33,13 @@ function pluginInput() {
 describe("server plugin", () => {
   test("registers the hidden reviewer agent through the beta config hook", async () => {
     const factory = server.server
-    const hooks = await factory(pluginInput(), { model: "kiro-openai/gpt-5.6-luna" })
+    const hooks = await factory(pluginInput(), { model: "openai/gpt-5.6-luna" })
     const config: any = {}
 
     await hooks.config?.(config)
 
     expect(config.agent["auto-permissions-reviewer"]).toMatchObject({
-      model: "kiro-openai/gpt-5.6-luna",
+      model: "openai/gpt-5.6-luna",
       mode: "subagent",
       hidden: true,
       steps: 1,
@@ -49,7 +49,7 @@ describe("server plugin", () => {
   })
 
   test("strips ambient context only for the hidden reviewer request", async () => {
-    const hooks = await server.server(pluginInput(), { model: "kiro-openai/gpt-5.6-luna" })
+    const hooks = await server.server(pluginInput(), { model: "openai/gpt-5.6-luna" })
     const reviewerSystem = ["large global prompt", "skills", "mcp"]
     const regularSystem = ["regular prompt"]
 
