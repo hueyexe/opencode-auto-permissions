@@ -47,7 +47,10 @@ export class OpenCodeClientAdapter implements ReviewerClient {
     let sessionID: string | undefined
     const abortRemote = () => {
       if (!sessionID || typeof session.abort !== "function") return
-      void Promise.resolve(session.abort({ sessionID, ...location })).catch(() => undefined)
+      const abortInput = stable
+        ? { path: { id: sessionID }, query: location }
+        : { sessionID, ...location }
+      void Promise.resolve(session.abort(abortInput)).catch(() => undefined)
     }
     input.signal.addEventListener("abort", abortRemote, { once: true })
 

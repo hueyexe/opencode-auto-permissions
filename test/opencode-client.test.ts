@@ -131,6 +131,40 @@ describe("OpenCodeClientAdapter", () => {
     expect(deleted).toBeTrue()
   })
 
+  test("uses the generated stable abort envelope when review is cancelled", async () => {
+    const calls: unknown[] = []
+    const controller = new AbortController()
+    const client = new OpenCodeClientAdapter({
+      postSessionIdPermissionsPermissionId: async () => {},
+      session: {
+        create: async () => ({ data: { id: "ses_review" } }),
+        prompt: async () => {
+          controller.abort("permission resolved")
+          throw new DOMException("permission resolved", "AbortError")
+        },
+        abort: async (input: unknown) => calls.push(input),
+        delete: async () => ({ data: true }),
+      },
+    })
+
+    await expect(
+      client.generate({
+        prompt: "review",
+        model: { providerID: "openai", id: "gpt-5.6-luna" },
+        parentSessionID: "ses_parent",
+        signal: controller.signal,
+      }),
+    ).rejects.toThrow("permission resolved")
+    await Promise.resolve()
+
+    expect(calls).toEqual([
+      {
+        path: { id: "ses_review" },
+        query: { directory: expect.stringContaining("opencode-auto-permissions") },
+      },
+    ])
+  })
+
   test("treats a permission 404 as a lost race", async () => {
     const permission = {
       marker: "bound",

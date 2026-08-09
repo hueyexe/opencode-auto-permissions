@@ -123,7 +123,8 @@ class OpenCodeClientAdapter {
     const abortRemote = () => {
       if (!sessionID || typeof session.abort !== "function")
         return;
-      Promise.resolve(session.abort({ sessionID, ...location })).catch(() => {
+      const abortInput = stable ? { path: { id: sessionID }, query: location } : { sessionID, ...location };
+      Promise.resolve(session.abort(abortInput)).catch(() => {
         return;
       });
     };
