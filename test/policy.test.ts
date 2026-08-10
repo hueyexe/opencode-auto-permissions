@@ -37,6 +37,18 @@ describe("applyDeterministicPolicy", () => {
     ).toBe("own_diagnostics_access")
   })
 
+  test("allows the stable diagnostics directory boundary without tool input", () => {
+    expect(
+      applyDeterministicPolicy({
+        request: {
+          action: "external_directory",
+          resources: ["/home/user/.local/state/opencode/auto-permissions/*"],
+        },
+        context: { rootSessionID: "ses_root", userMessages: [] },
+      })?.reasonCode,
+    ).toBe("own_diagnostics_access")
+  })
+
   test("denies recursive deletion of the filesystem root", () => {
     expect(applyDeterministicPolicy(input("sudo rm -rf /"))?.reasonCode).toBe("catastrophic_delete")
   })

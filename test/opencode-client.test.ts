@@ -53,7 +53,6 @@ describe("OpenCodeClientAdapter", () => {
     expect(text).toEqual({ decision: "ask", reasonCode: "x", reason: "Review." })
     expect(calls.map((call) => call.method)).toEqual(["create", "prompt", "delete"])
     expect(calls[0]?.input).toMatchObject({
-      parentID: "ses_parent",
       agent: "auto-permissions-reviewer",
       model: { providerID: "example", id: "luna-5.6" },
       permission: [
@@ -62,6 +61,7 @@ describe("OpenCodeClientAdapter", () => {
       ],
       directory: expect.stringContaining("opencode-auto-permissions"),
     })
+    expect(calls[0]?.input).not.toHaveProperty("parentID")
     expect(calls[1]?.input).toMatchObject({
       agent: "auto-permissions-reviewer",
       format: {

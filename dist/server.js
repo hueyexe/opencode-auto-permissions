@@ -242,10 +242,9 @@ class OpenCodeClientAdapter {
         throw abortError(input.signal.reason);
       const createInput = stable ? {
         query: location,
-        body: { parentID: input.parentSessionID, title: "Auto Permissions review" }
+        body: { title: "Auto Permissions review" }
       } : {
         ...location,
-        parentID: input.parentSessionID,
         title: "Auto Permissions review",
         agent: REVIEWER_AGENT_ID,
         model: input.model,
@@ -556,7 +555,7 @@ function isOwnDiagnosticsAccess(input) {
         values.push(value);
     }
   }
-  return values.some((value) => /(?:^|[\\/])opencode[\\/]auto-permissions[\\/]decisions\.jsonl(?:$|[?*])/i.test(value));
+  return values.some((value) => /(?:^|[\\/])opencode[\\/]auto-permissions(?:[\\/](?:decisions\.jsonl|[?*]))?$/i.test(value));
 }
 function explicitlyProhibited(input) {
   const message = input.context.userMessages.at(-1);

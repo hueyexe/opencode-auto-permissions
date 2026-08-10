@@ -112,6 +112,8 @@ With `debug: true`, diagnostics are written to `$XDG_STATE_HOME/opencode/auto-pe
 
 Access to this bounded diagnostics file is deterministically allowed by the plugin so troubleshooting cannot be blocked by speculative sensitivity concerns. This exception applies only to Auto Permissions' own `decisions.jsonl` path.
 
+Reviewer sessions are standalone rather than children of the active coding session. This keeps reviewer model and variant state isolated from the main agent and its displayed reasoning level.
+
 ## Compatibility
 
 Release `v0.1.0` has been acceptance-tested in the real TUI with:

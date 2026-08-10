@@ -59,11 +59,10 @@ export class OpenCodeClientAdapter implements ReviewerClient {
       const createInput = stable
         ? {
             query: location,
-            body: { parentID: input.parentSessionID, title: "Auto Permissions review" },
+            body: { title: "Auto Permissions review" },
           }
         : {
             ...location,
-            parentID: input.parentSessionID,
             title: "Auto Permissions review",
             agent: REVIEWER_AGENT_ID,
             model: input.model,

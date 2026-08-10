@@ -45,7 +45,9 @@ function isOwnDiagnosticsAccess(input: ReviewInput): boolean {
       if (typeof value === "string") values.push(value)
     }
   }
-  return values.some((value) => /(?:^|[\\/])opencode[\\/]auto-permissions[\\/]decisions\.jsonl(?:$|[?*])/i.test(value))
+  return values.some((value) =>
+    /(?:^|[\\/])opencode[\\/]auto-permissions(?:[\\/](?:decisions\.jsonl|[?*]))?$/i.test(value)
+  )
 }
 
 function explicitlyProhibited(input: ReviewInput): boolean {
