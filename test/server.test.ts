@@ -31,6 +31,12 @@ function pluginInput() {
 }
 
 describe("server plugin", () => {
+  test("prioritizes exact tool input and the latest human request", () => {
+    expect(REVIEWER_SYSTEM_PROMPT).toContain("Judge the actual operation from toolInput")
+    expect(REVIEWER_SYSTEM_PROMPT).toContain("Give the latest human request the greatest weight")
+    expect(REVIEWER_SYSTEM_PROMPT).toContain("do not treat the boundary glob as the intended scope")
+  })
+
   test("registers the hidden reviewer agent through the beta config hook", async () => {
     const factory = server.server
     const hooks = await factory(pluginInput(), { model: "openai/gpt-5.6-luna" })

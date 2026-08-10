@@ -69,6 +69,7 @@ For each supported permission request, Auto Permissions combines deterministic s
 - Explicit user prohibitions and clearly catastrophic root/home deletion are rejected without model review.
 - Contextual risks such as `sudo`, scoped deletion, force push, deployment, credential access, and external-directory access are judged against the user's request and target scope.
 - External-directory boundaries are not treated as sensitive by default: ordinary project, tool, cache, log, state, temporary, and worktree paths are approved unless the target or operation presents a concrete hazard.
+- Broad boundary globs such as `/tmp/*` are not treated as the requested scope when the tool input identifies a precise target; the reviewer evaluates the actual operation and latest user request.
 - The reviewer is tuned for unattended agents: it defaults to approval when an action reasonably serves the task and uses `ask` only as a last resort.
 - Reviewer failures and timeouts safely fall back to OpenCode's native prompt.
 - Reviewer sessions are hidden, have no tools, and deny all permissions.
