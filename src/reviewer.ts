@@ -16,6 +16,7 @@ import type {
   RuntimeContext,
 } from "./types.ts"
 import { parseDecision } from "./verdict.ts"
+import { failureCategory, writeDiagnostic } from "./diagnostics.ts"
 
 export interface ReviewerOverrides {
   client?: ReviewerClient
@@ -47,10 +48,12 @@ export function installReviewer(context: RuntimeContext, overrides: ReviewerOver
       return
 
     const controller = new AbortController()
+    const startedAt = performance.now()
     inFlight.set(asked.id, controller)
-    void reviewAndReply(context, client, config, asked, controller.signal, overrides)
+    void reviewAndReply(context, client, config, asked, controller.signal, overrides, startedAt)
       .catch((error) => {
         if (controller.signal.aborted) return
+        writeFailure(config, asked, startedAt, error)
         overrides.onFailure?.(asked, error)
         context.showToast?.({
           title: "Auto Permissions unavailable",
@@ -71,10 +74,12 @@ export function installReviewer(context: RuntimeContext, overrides: ReviewerOver
     if (!asked || !protocols.has(asked.protocol) || inFlight.has(asked.id))
       return
     const controller = new AbortController()
+    const startedAt = performance.now()
     inFlight.set(asked.id, controller)
-    void reviewAndReply(context, client, config, asked, controller.signal, overrides)
+    void reviewAndReply(context, client, config, asked, controller.signal, overrides, startedAt)
       .catch((error) => {
         if (controller.signal.aborted) return
+        writeFailure(config, asked, startedAt, error)
         overrides.onFailure?.(asked, error)
         context.showToast?.({
           title: "Auto Permissions unavailable",
@@ -105,6 +110,7 @@ async function reviewAndReply(
   request: PermissionRequest,
   parentSignal: AbortSignal,
   overrides: ReviewerOverrides,
+  startedAt: number,
 ): Promise<void> {
   const input = await collectReviewInput(context, request, config.userMessageCount)
   if (parentSignal.aborted) return
@@ -114,7 +120,10 @@ async function reviewAndReply(
   if (parentSignal.aborted) return
 
   overrides.onDecision?.(request, decision, config.shadow)
-  if (config.shadow) return
+  if (config.shadow) {
+    writeDecision(config, request, startedAt, decision, policyDecision ? "policy" : "model")
+    return
+  }
 
   if (decision.kind === "ask") {
     context.showToast?.({
@@ -123,6 +132,7 @@ async function reviewAndReply(
       variant: "info",
       duration: 4_000,
     })
+    writeDecision(config, request, startedAt, decision, policyDecision ? "policy" : "model", "manual")
     return
   }
 
@@ -130,12 +140,13 @@ async function reviewAndReply(
   if (!pending || parentSignal.aborted) return
 
   if (decision.kind === "allow") {
-    await client.reply({
+    const result = await client.reply({
       sessionID: request.sessionID,
       requestID: request.id,
       reply: "once",
       protocol: request.protocol,
     })
+    writeDecision(config, request, startedAt, decision, policyDecision ? "policy" : "model", result)
     return
   }
 
@@ -147,7 +158,50 @@ async function reviewAndReply(
     protocol: request.protocol,
   })
   context.showToast?.({ title: "Blocked", message: decision.reason, variant: "warning", duration: 4_000 })
+  writeDecision(config, request, startedAt, decision, policyDecision ? "policy" : "model", result)
   if (result === "replied") context.resumeAfterDenial?.(request.sessionID, decision.reason)
+}
+
+function writeDecision(
+  config: Config,
+  request: PermissionRequest,
+  startedAt: number,
+  decision: Decision,
+  source: "policy" | "model",
+  replyResult?: "replied" | "not_found" | "manual",
+): void {
+  writeDiagnostic(config.diagnosticsPath, {
+    timestamp: new Date().toISOString(),
+    requestID: request.id,
+    sessionID: request.sessionID,
+    protocol: request.protocol,
+    action: request.action,
+    resourceCount: request.resources.length,
+    elapsedMs: Math.round(performance.now() - startedAt),
+    outcome: "decision",
+    source,
+    decision: decision.kind,
+    reasonCode: decision.reasonCode,
+    reason: decision.reason,
+    shadow: config.shadow,
+    ...(replyResult ? { replyResult } : {}),
+  })
+}
+
+function writeFailure(config: Config, request: PermissionRequest, startedAt: number, error: unknown): void {
+  writeDiagnostic(config.diagnosticsPath, {
+    timestamp: new Date().toISOString(),
+    requestID: request.id,
+    sessionID: request.sessionID,
+    protocol: request.protocol,
+    action: request.action,
+    resourceCount: request.resources.length,
+    elapsedMs: Math.round(performance.now() - startedAt),
+    outcome: "failure",
+    failureCategory: failureCategory(error),
+    errorName: error instanceof Error ? error.name : "Error",
+    errorMessage: error instanceof Error ? error.message : String(error),
+  })
 }
 
 async function modelDecision(

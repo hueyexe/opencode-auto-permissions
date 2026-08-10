@@ -1,4 +1,5 @@
 import type { ReviewModel } from "./types.ts"
+import { defaultDiagnosticsPath } from "./diagnostics.ts"
 
 const DEFAULT_TIMEOUT_MS = 8_000
 const DEFAULT_USER_MESSAGE_COUNT = 4
@@ -10,6 +11,7 @@ export interface Config {
   userMessageCount: number
   shadow: boolean
   runtime: "auto" | "stable" | "v2"
+  diagnosticsPath: string | undefined
 }
 
 export function parseConfig(options: Readonly<Record<string, unknown>>): Config {
@@ -40,7 +42,15 @@ export function parseConfig(options: Readonly<Record<string, unknown>>): Config 
     ),
     shadow: options.shadow === true,
     runtime: parseRuntime(options.runtime),
+    diagnosticsPath: parseDiagnosticsPath(options.debug),
   }
+}
+
+function parseDiagnosticsPath(value: unknown): string | undefined {
+  if (value === undefined || value === false) return undefined
+  if (value === true) return defaultDiagnosticsPath()
+  if (typeof value === "string" && value.trim()) return value.trim()
+  throw new Error('Auto Permissions debug must be true, false, or a file path')
 }
 
 function parseRuntime(value: unknown): Config["runtime"] {

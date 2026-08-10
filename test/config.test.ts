@@ -10,6 +10,7 @@ describe("parseConfig", () => {
       userMessageCount: 4,
       shadow: false,
       runtime: "auto",
+      diagnosticsPath: undefined,
     })
   })
 
@@ -34,5 +35,11 @@ describe("parseConfig", () => {
     expect(parseConfig({ model: "a/b", runtime: "stable" }).runtime).toBe("stable")
     expect(parseConfig({ model: "a/b", runtime: "v2" }).runtime).toBe("v2")
     expect(() => parseConfig({ model: "a/b", runtime: "other" })).toThrow(/runtime/)
+  })
+
+  test("enables bounded diagnostics with a default or explicit path", () => {
+    expect(parseConfig({ model: "a/b", debug: true }).diagnosticsPath).toEndWith("opencode/auto-permissions/decisions.jsonl")
+    expect(parseConfig({ model: "a/b", debug: "/tmp/decisions.jsonl" }).diagnosticsPath).toBe("/tmp/decisions.jsonl")
+    expect(() => parseConfig({ model: "a/b", debug: 1 })).toThrow(/debug/)
   })
 })

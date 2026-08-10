@@ -38,6 +38,54 @@ Decision rules:
 
 Submit the final decision through the StructuredOutput tool.`;
 
+// src/diagnostics.ts
+import { mkdir, readFile, writeFile } from "fs/promises";
+import { homedir } from "os";
+import { dirname, join } from "path";
+var MAX_RECORDS = 100;
+var queues = new Map;
+function defaultDiagnosticsPath() {
+  const stateRoot = process.env.XDG_STATE_HOME ?? join(homedir(), ".local", "state");
+  return join(stateRoot, "opencode", "auto-permissions", "decisions.jsonl");
+}
+function writeDiagnostic(path, record) {
+  if (!path)
+    return;
+  const previous = queues.get(path) ?? Promise.resolve();
+  const next = previous.then(() => appendBounded(path, record)).catch(() => {
+    return;
+  });
+  queues.set(path, next);
+  next.finally(() => {
+    if (queues.get(path) === next)
+      queues.delete(path);
+  });
+}
+function failureCategory(error) {
+  const message = error instanceof Error ? error.message : String(error);
+  if (/timed out/i.test(message))
+    return "timeout";
+  if (error instanceof DOMException && error.name === "AbortError")
+    return "cancelled";
+  if (/invalid decision|no structured output|invalid response/i.test(message))
+    return "invalid_response";
+  return "error";
+}
+async function appendBounded(path, record) {
+  await mkdir(dirname(path), { recursive: true });
+  const existing = await readFile(path, "utf8").catch((error) => {
+    if (error.code === "ENOENT")
+      return "";
+    throw error;
+  });
+  const records = existing.split(`
+`).filter(Boolean);
+  records.push(JSON.stringify(record));
+  await writeFile(path, records.slice(-MAX_RECORDS).join(`
+`) + `
+`, { mode: 384 });
+}
+
 // src/config.ts
 var DEFAULT_TIMEOUT_MS = 8000;
 var DEFAULT_USER_MESSAGE_COUNT = 4;
@@ -60,8 +108,18 @@ function parseConfig(options) {
     timeoutMs: boundedInteger(options.timeoutMs, DEFAULT_TIMEOUT_MS, 100, 30000, "timeoutMs"),
     userMessageCount: boundedInteger(options.userMessageCount, DEFAULT_USER_MESSAGE_COUNT, 1, 20, "userMessageCount"),
     shadow: options.shadow === true,
-    runtime: parseRuntime(options.runtime)
+    runtime: parseRuntime(options.runtime),
+    diagnosticsPath: parseDiagnosticsPath(options.debug)
   };
+}
+function parseDiagnosticsPath(value) {
+  if (value === undefined || value === false)
+    return;
+  if (value === true)
+    return defaultDiagnosticsPath();
+  if (typeof value === "string" && value.trim())
+    return value.trim();
+  throw new Error("Auto Permissions debug must be true, false, or a file path");
 }
 function parseRuntime(value) {
   if (value === undefined)
@@ -80,14 +138,14 @@ function boundedInteger(value, fallback, minimum, maximum, name) {
 }
 
 // src/opencode-client.ts
-import { mkdir } from "fs/promises";
+import { mkdir as mkdir2 } from "fs/promises";
 import { tmpdir } from "os";
-import { join } from "path";
+import { join as join2 } from "path";
 var REVIEWER_PERMISSIONS = [
   { permission: "*", pattern: "*", action: "deny" },
   { permission: "StructuredOutput", pattern: "*", action: "allow" }
 ];
-var REVIEWER_DIRECTORY = join(tmpdir(), "opencode-auto-permissions", "reviewer");
+var REVIEWER_DIRECTORY = join2(tmpdir(), "opencode-auto-permissions", "reviewer");
 
 class OpenCodeClientAdapter {
   client;
@@ -95,7 +153,7 @@ class OpenCodeClientAdapter {
     this.client = client;
   }
   async prewarm() {
-    await mkdir(REVIEWER_DIRECTORY, { recursive: true });
+    await mkdir2(REVIEWER_DIRECTORY, { recursive: true });
     const location = { directory: REVIEWER_DIRECTORY };
     const requests = [];
     if (typeof this.client.app?.agents === "function")
@@ -118,7 +176,7 @@ class OpenCodeClientAdapter {
     if (!session || typeof session.create !== "function" || typeof session.prompt !== "function") {
       throw new Error("OpenCode reviewer session API is unavailable");
     }
-    await mkdir(REVIEWER_DIRECTORY, { recursive: true });
+    await mkdir2(REVIEWER_DIRECTORY, { recursive: true });
     const location = { directory: REVIEWER_DIRECTORY };
     let sessionID;
     const abortRemote = () => {
@@ -508,10 +566,12 @@ function installReviewer(context, overrides = {}) {
     if (!asked || !protocols.has(asked.protocol) || inFlight.has(asked.id))
       return;
     const controller = new AbortController;
+    const startedAt = performance.now();
     inFlight.set(asked.id, controller);
-    reviewAndReply(context, client, config, asked, controller.signal, overrides).catch((error) => {
+    reviewAndReply(context, client, config, asked, controller.signal, overrides, startedAt).catch((error) => {
       if (controller.signal.aborted)
         return;
+      writeFailure(config, asked, startedAt, error);
       overrides.onFailure?.(asked, error);
       context.showToast?.({
         title: "Auto Permissions unavailable",
@@ -530,10 +590,12 @@ function installReviewer(context, overrides = {}) {
     if (!asked || !protocols.has(asked.protocol) || inFlight.has(asked.id))
       return;
     const controller = new AbortController;
+    const startedAt = performance.now();
     inFlight.set(asked.id, controller);
-    reviewAndReply(context, client, config, asked, controller.signal, overrides).catch((error) => {
+    reviewAndReply(context, client, config, asked, controller.signal, overrides, startedAt).catch((error) => {
       if (controller.signal.aborted)
         return;
+      writeFailure(config, asked, startedAt, error);
       overrides.onFailure?.(asked, error);
       context.showToast?.({
         title: "Auto Permissions unavailable",
@@ -556,7 +618,7 @@ function installReviewer(context, overrides = {}) {
     inFlight.clear();
   };
 }
-async function reviewAndReply(context, client, config, request, parentSignal, overrides) {
+async function reviewAndReply(context, client, config, request, parentSignal, overrides, startedAt) {
   const input = await collectReviewInput(context, request, config.userMessageCount);
   if (parentSignal.aborted)
     return;
@@ -565,8 +627,10 @@ async function reviewAndReply(context, client, config, request, parentSignal, ov
   if (parentSignal.aborted)
     return;
   overrides.onDecision?.(request, decision, config.shadow);
-  if (config.shadow)
+  if (config.shadow) {
+    writeDecision(config, request, startedAt, decision, policyDecision ? "policy" : "model");
     return;
+  }
   if (decision.kind === "ask") {
     context.showToast?.({
       title: "Manual approval",
@@ -574,18 +638,20 @@ async function reviewAndReply(context, client, config, request, parentSignal, ov
       variant: "info",
       duration: 4000
     });
+    writeDecision(config, request, startedAt, decision, policyDecision ? "policy" : "model", "manual");
     return;
   }
   const pending = await isRequestPending(context, request);
   if (!pending || parentSignal.aborted)
     return;
   if (decision.kind === "allow") {
-    await client.reply({
+    const result2 = await client.reply({
       sessionID: request.sessionID,
       requestID: request.id,
       reply: "once",
       protocol: request.protocol
     });
+    writeDecision(config, request, startedAt, decision, policyDecision ? "policy" : "model", result2);
     return;
   }
   const result = await client.reply({
@@ -596,8 +662,42 @@ async function reviewAndReply(context, client, config, request, parentSignal, ov
     protocol: request.protocol
   });
   context.showToast?.({ title: "Blocked", message: decision.reason, variant: "warning", duration: 4000 });
+  writeDecision(config, request, startedAt, decision, policyDecision ? "policy" : "model", result);
   if (result === "replied")
     context.resumeAfterDenial?.(request.sessionID, decision.reason);
+}
+function writeDecision(config, request, startedAt, decision, source, replyResult) {
+  writeDiagnostic(config.diagnosticsPath, {
+    timestamp: new Date().toISOString(),
+    requestID: request.id,
+    sessionID: request.sessionID,
+    protocol: request.protocol,
+    action: request.action,
+    resourceCount: request.resources.length,
+    elapsedMs: Math.round(performance.now() - startedAt),
+    outcome: "decision",
+    source,
+    decision: decision.kind,
+    reasonCode: decision.reasonCode,
+    reason: decision.reason,
+    shadow: config.shadow,
+    ...replyResult ? { replyResult } : {}
+  });
+}
+function writeFailure(config, request, startedAt, error) {
+  writeDiagnostic(config.diagnosticsPath, {
+    timestamp: new Date().toISOString(),
+    requestID: request.id,
+    sessionID: request.sessionID,
+    protocol: request.protocol,
+    action: request.action,
+    resourceCount: request.resources.length,
+    elapsedMs: Math.round(performance.now() - startedAt),
+    outcome: "failure",
+    failureCategory: failureCategory(error),
+    errorName: error instanceof Error ? error.name : "Error",
+    errorMessage: error instanceof Error ? error.message : String(error)
+  });
 }
 async function modelDecision(context, client, config, input, parentSignal) {
   const timeout = new AbortController;

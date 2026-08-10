@@ -69,8 +69,11 @@ The plugin tuple accepts these options:
 | `userMessageCount` | `4` | Recent user messages included in review context, from 1 to 20. |
 | `shadow` | `false` | Evaluate and record decisions without replying to permission requests. |
 | `runtime` | `"auto"` | Diagnostics override: `"auto"`, `"stable"`, or `"v2"`. Leave this on `"auto"` in normal use. |
+| `debug` | `false` | Write the latest 100 privacy-minimized outcomes to a JSONL file. Use `true` for the default path or provide a file path. |
 
 Start with `shadow: true` if you want to observe behavior before enabling automatic replies.
+
+With `debug: true`, diagnostics are written to `$XDG_STATE_HOME/opencode/auto-permissions/decisions.jsonl` (normally `~/.local/state/opencode/auto-permissions/decisions.jsonl`). Records include action type, timing, verdict, reason, reply result, and failure category. Commands, paths, tool inputs, and conversation text are not logged.
 
 ## Compatibility
 
