@@ -3,6 +3,7 @@ import { createStableRuntime, protocolForVersion } from "../src/stable.ts"
 
 function client() {
   const prompts: unknown[] = []
+  let statusChecks = 0
   const sessions = new Map([
     ["ses_child", { id: "ses_child", parentID: "ses_root" }],
     ["ses_root", { id: "ses_root" }],
@@ -39,6 +40,9 @@ function client() {
         prompts.push(input)
         return { data: undefined }
       },
+      status: async () => ({
+        data: statusChecks++ === 0 ? { ses_child: { type: "busy" } } : { ses_child: { type: "idle" } },
+      }),
     },
     permission: {
       list: async () => ({ data: pending }),
@@ -73,7 +77,7 @@ describe("createStableRuntime", () => {
     const runtime = createStableRuntime(injected, { model: "openai/gpt-5.6-luna" }, "/repo")
 
     runtime.context.resumeAfterDenial?.("ses_child", "The user explicitly prohibited this action.")
-    await Promise.resolve()
+    await new Promise((resolve) => setTimeout(resolve, 150))
 
     expect(injected.prompts).toEqual([
       {

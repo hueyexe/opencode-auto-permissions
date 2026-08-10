@@ -13,6 +13,7 @@ export function createStableRuntime(
   const sessions = new Map<string, { id: string; parentID?: string }>()
   const messages = new Map<string, unknown[]>()
   const pending = new Map<string, PermissionRequest>()
+  const resumeControllers = new Set<AbortController>()
 
   const on = (type: string, handler: Handler) => {
     const handlers = listeners.get(type) ?? new Set<Handler>()
@@ -89,16 +90,24 @@ export function createStableRuntime(
     },
     resumeAfterDenial(sessionID, reason) {
       if (typeof client.session?.promptAsync !== "function") return
-      void client.session.promptAsync({
-        path: { id: sessionID },
-        query: { directory },
-        body: {
-          parts: [{
-            type: "text",
-            text: `[Auto Permissions] The requested action was blocked: ${reason} Do not retry it. Briefly report the block to the user, then continue with any remaining safe work.`,
-          }],
-        },
-      }).catch(() => undefined)
+      const controller = new AbortController()
+      resumeControllers.add(controller)
+      void waitForIdle(client, sessionID, directory, controller.signal)
+        .then((idle) => {
+          if (!idle || controller.signal.aborted) return
+          return client.session.promptAsync({
+            path: { id: sessionID },
+            query: { directory },
+            body: {
+              parts: [{
+                type: "text",
+                text: `[Auto Permissions] The requested action was blocked: ${reason} Do not retry it. Briefly report the block to the user, then continue with any remaining safe work.`,
+              }],
+            },
+          })
+        })
+        .catch(() => undefined)
+        .finally(() => resumeControllers.delete(controller))
     },
   }
 
@@ -127,8 +136,33 @@ export function createStableRuntime(
       sessions.clear()
       messages.clear()
       pending.clear()
+      for (const controller of resumeControllers) controller.abort()
+      resumeControllers.clear()
     },
   }
+}
+
+async function waitForIdle(client: any, sessionID: string, directory: string, signal: AbortSignal): Promise<boolean> {
+  if (typeof client.session?.status !== "function") {
+    await delay(250, signal)
+    return !signal.aborted
+  }
+  for (let attempt = 0; attempt < 50 && !signal.aborted; attempt++) {
+    const statuses = unwrap(await client.session.status({ query: { directory } }))
+    if (!isRecord(statuses) || !isRecord(statuses[sessionID]) || statuses[sessionID].type === "idle") return true
+    await delay(100, signal)
+  }
+  return false
+}
+
+function delay(milliseconds: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, milliseconds)
+    signal.addEventListener("abort", () => {
+      clearTimeout(timer)
+      resolve()
+    }, { once: true })
+  })
 }
 
 export function protocolForVersion(version: string | undefined): "stable" | "v2" | undefined {

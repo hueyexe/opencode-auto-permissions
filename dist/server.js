@@ -629,6 +629,7 @@ function createStableRuntime(injectedClient, options, directory2) {
   const sessions = new Map;
   const messages = new Map;
   const pending = new Map;
+  const resumeControllers = new Set;
   const on = (type, handler) => {
     const handlers = listeners.get(type) ?? new Set;
     handlers.add(handler);
@@ -709,18 +710,24 @@ function createStableRuntime(injectedClient, options, directory2) {
     resumeAfterDenial(sessionID, reason) {
       if (typeof client.session?.promptAsync !== "function")
         return;
-      client.session.promptAsync({
-        path: { id: sessionID },
-        query: { directory: directory2 },
-        body: {
-          parts: [{
-            type: "text",
-            text: `[Auto Permissions] The requested action was blocked: ${reason} Do not retry it. Briefly report the block to the user, then continue with any remaining safe work.`
-          }]
-        }
+      const controller = new AbortController;
+      resumeControllers.add(controller);
+      waitForIdle(client, sessionID, directory2, controller.signal).then((idle) => {
+        if (!idle || controller.signal.aborted)
+          return;
+        return client.session.promptAsync({
+          path: { id: sessionID },
+          query: { directory: directory2 },
+          body: {
+            parts: [{
+              type: "text",
+              text: `[Auto Permissions] The requested action was blocked: ${reason} Do not retry it. Briefly report the block to the user, then continue with any remaining safe work.`
+            }]
+          }
+        });
       }).catch(() => {
         return;
-      });
+      }).finally(() => resumeControllers.delete(controller));
     }
   };
   return {
@@ -749,8 +756,33 @@ function createStableRuntime(injectedClient, options, directory2) {
       sessions.clear();
       messages.clear();
       pending.clear();
+      for (const controller of resumeControllers)
+        controller.abort();
+      resumeControllers.clear();
     }
   };
+}
+async function waitForIdle(client, sessionID, directory2, signal) {
+  if (typeof client.session?.status !== "function") {
+    await delay(250, signal);
+    return !signal.aborted;
+  }
+  for (let attempt = 0;attempt < 50 && !signal.aborted; attempt++) {
+    const statuses = unwrap(await client.session.status({ query: { directory: directory2 } }));
+    if (!isRecord4(statuses) || !isRecord4(statuses[sessionID]) || statuses[sessionID].type === "idle")
+      return true;
+    await delay(100, signal);
+  }
+  return false;
+}
+function delay(milliseconds, signal) {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, milliseconds);
+    signal.addEventListener("abort", () => {
+      clearTimeout(timer);
+      resolve();
+    }, { once: true });
+  });
 }
 function protocolForVersion(version) {
   if (!version)
