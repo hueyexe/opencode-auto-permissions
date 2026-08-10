@@ -7,6 +7,13 @@ export function applyDeterministicPolicy(input: ReviewInput): Decision | null {
   if (explicitlyProhibited(input)) {
     return deny("explicit_user_prohibition", "The user explicitly prohibited this action.")
   }
+  if (action === "external_directory" && isOwnDiagnosticsAccess(input)) {
+    return {
+      kind: "allow",
+      reasonCode: "own_diagnostics_access",
+      reason: "Accesses Auto Permissions' own bounded diagnostics state.",
+    }
+  }
   if (action !== "shell" && action !== "bash") return null
   const command = commandText(input)
   if (!command) return null
@@ -27,6 +34,18 @@ export function applyDeterministicPolicy(input: ReviewInput): Decision | null {
   }
 
   return null
+}
+
+function isOwnDiagnosticsAccess(input: ReviewInput): boolean {
+  const values = [...input.request.resources]
+  const toolInput = input.request.toolInput
+  if (typeof toolInput === "object" && toolInput !== null) {
+    for (const key of ["filePath", "path"]) {
+      const value = Reflect.get(toolInput, key)
+      if (typeof value === "string") values.push(value)
+    }
+  }
+  return values.some((value) => /(?:^|[\\/])opencode[\\/]auto-permissions[\\/]decisions\.jsonl(?:$|[?*])/i.test(value))
 }
 
 function explicitlyProhibited(input: ReviewInput): boolean {
