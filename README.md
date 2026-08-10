@@ -1,18 +1,20 @@
 # OpenCode Auto Permissions
 
 [![release](https://img.shields.io/github/v/release/hueyexe/opencode-auto-permissions.svg)](https://github.com/hueyexe/opencode-auto-permissions/releases)
-[![tests](https://img.shields.io/badge/tests-53%20passing-brightgreen.svg)](./test)
+[![tests](https://img.shields.io/badge/tests-62%20passing-brightgreen.svg)](./test)
 [![TypeScript](https://img.shields.io/badge/TypeScript-strict-blue.svg)](./tsconfig.json)
 [![OpenCode](https://img.shields.io/badge/OpenCode-stable%20%2B%20V2-blue.svg)](./docs/COMPATIBILITY_SPIKE.md)
 [![license](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 
-Automatic, model-driven permission review for OpenCode. Routine actions continue quietly, clearly prohibited actions are blocked, and ambiguous requests remain in OpenCode's native permission prompt for you to decide.
+Automatic, context-aware permission review for OpenCode. Let routine work run normally, send riskier actions to a reviewer model, and keep coding agents moving while you are away.
 
 The plugin supports stable and V2 OpenCode permission protocols automatically. It never grants permanent `always` permission.
 
 ## Quick Start
 
-Add the tagged Git package and a reviewer model to your global OpenCode config at `~/.config/opencode/opencode.json`:
+The recommended setup is not to set every permission to `ask`. Allow routine work in OpenCode, then use `ask` for operations where context matters. Only `ask` requests reach Auto Permissions.
+
+Add the tagged Git package, reviewer model, and risk-based permission rules to your global OpenCode config at `~/.config/opencode/opencode.json`:
 
 ```json
 {
@@ -23,13 +25,26 @@ Add the tagged Git package and a reviewer model to your global OpenCode config a
     ]
   ],
   "permission": {
-    "bash": "ask",
-    "external_directory": "ask"
+    "bash": {
+      "*": "allow",
+      "rm *": "ask",
+      "sudo *": "ask",
+      "git push *": "ask",
+      "git reset --hard*": "ask",
+      "git clean -f*": "ask",
+      "curl * | *sh*": "ask",
+      "wget * | *sh*": "ask"
+    },
+    "external_directory": "ask",
+    "webfetch": "allow",
+    "websearch": "allow"
   }
 }
 ```
 
-Use any configured model in `provider/model` form. Restart OpenCode after changing the config.
+OpenCode uses the last matching permission rule, so keep the broad `"*": "allow"` rule first and the narrower `ask` rules after it. Adapt the list to your environment: deployments, infrastructure commands, package publication, and production database tools are good candidates for contextual review.
+
+Use any configured model in `provider/model` form. A fast, reliable model that follows JSON instructions works best. Restart OpenCode after changing the config.
 
 V2 users must add the same plugin tuple to `~/.config/opencode/tui.json` so the TUI adapter can resolve V2 permission events:
 
@@ -50,13 +65,32 @@ Stable OpenCode does not need the TUI entry. Keep the tag pinned in both files w
 
 For each supported permission request, Auto Permissions combines deterministic safety rules with an isolated, one-step reviewer model:
 
-- Explicit user prohibitions are rejected without model review.
-- Clearly authorized, routine actions can be approved once.
-- Ambiguous requests, reviewer failures, and timeouts fall back to OpenCode's native prompt.
+- OpenCode handles `allow` and `deny` rules before the plugin; Auto Permissions reviews requests configured as `ask`.
+- Explicit user prohibitions and clearly catastrophic root/home deletion are rejected without model review.
+- Contextual risks such as `sudo`, scoped deletion, force push, deployment, credential access, and external-directory access are judged against the user's request and target scope.
+- External-directory boundaries are not treated as sensitive by default: ordinary project, tool, cache, log, state, temporary, and worktree paths are approved unless the target or operation presents a concrete hazard.
+- The reviewer is tuned for unattended agents: it defaults to approval when an action reasonably serves the task and uses `ask` only as a last resort.
+- Reviewer failures and timeouts safely fall back to OpenCode's native prompt.
 - Reviewer sessions are hidden, have no tools, and deny all permissions.
 - Only a small, recent window of relevant user context is sent for review.
 
-The reviewer never receives authority to execute the requested action. It can only recommend a one-time approval, reject the request, or abstain.
+The reviewer never receives authority to execute the requested action. It can only grant one-time approval, reject the request, or abstain. It never grants permanent `always` permission.
+
+When an action is rejected, Auto Permissions returns the reason to the main agent and asks it to continue with a safer alternative when possible. For example, it can target a generated subdirectory instead of a broad recursive delete, use `--force-with-lease` instead of an unrestricted force push, or inspect a deployment plan before applying it. A denial should redirect useful work rather than end the session.
+
+## Choosing Rules
+
+Use OpenCode's three permission outcomes deliberately:
+
+| Rule | Use it for | Plugin behavior |
+| --- | --- | --- |
+| `allow` | Routine, expected work that should never wait | OpenCode runs it immediately; the reviewer is not called. |
+| `ask` | Risk depends on user intent, target, or scope | Auto Permissions reviews context and replies once. |
+| `deny` | Actions that must never run in your environment | OpenCode blocks it immediately; the reviewer cannot override it. |
+
+For unattended multi-agent work, prefer `allow` for ordinary reads, edits, tests, builds, and source-control inspection. Prefer `ask` over `deny` for commands that can be legitimate in the right context. Reserve `deny` for firm organizational or personal boundaries.
+
+Avoid an all-`ask` configuration unless you are evaluating the plugin in `shadow` mode. It adds model latency to every tool call and makes reviewer outages affect routine work.
 
 ## Configuration
 

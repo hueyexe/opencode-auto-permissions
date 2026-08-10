@@ -24,6 +24,9 @@ export interface DiagnosticRecord {
   failureCategory?: "timeout" | "cancelled" | "invalid_response" | "error"
   errorName?: string
   errorMessage?: string
+  errorTag?: string
+  errorCode?: string | number
+  errorStatus?: string | number
 }
 
 export function defaultDiagnosticsPath(): string {
@@ -42,11 +45,66 @@ export function writeDiagnostic(path: string | undefined, record: DiagnosticReco
 }
 
 export function failureCategory(error: unknown): NonNullable<DiagnosticRecord["failureCategory"]> {
-  const message = error instanceof Error ? error.message : String(error)
+  const message = describeError(error).message
   if (/timed out/i.test(message)) return "timeout"
   if (error instanceof DOMException && error.name === "AbortError") return "cancelled"
   if (/invalid decision|no structured output|invalid response/i.test(message)) return "invalid_response"
   return "error"
+}
+
+export function describeError(error: unknown): {
+  name: string
+  message: string
+  tag?: string
+  code?: string | number
+  status?: string | number
+} {
+  const records = nestedRecords(error)
+  const name = firstString(records, ["name"]) ?? (error instanceof Error ? error.name : "Error")
+  const message = firstString(records, ["message", "detail", "reason", "error_description"])
+    ?? (typeof error === "string" ? error : "Unknown non-Error failure")
+  const tag = firstString(records, ["_tag", "type"])
+  const code = firstScalar(records, ["code"])
+  const status = firstScalar(records, ["status", "statusCode"])
+  return {
+    name: bounded(name),
+    message: bounded(message),
+    ...(tag ? { tag: bounded(tag) } : {}),
+    ...(code !== undefined ? { code } : {}),
+    ...(status !== undefined ? { status } : {}),
+  }
+}
+
+function nestedRecords(value: unknown): Record<string, unknown>[] {
+  const records: Record<string, unknown>[] = []
+  let current = value
+  for (let depth = 0; depth < 4 && typeof current === "object" && current !== null; depth++) {
+    const record = current as Record<string, unknown>
+    records.push(record)
+    current = record.error ?? record.data ?? record.cause
+  }
+  return records
+}
+
+function firstString(records: Record<string, unknown>[], keys: string[]): string | undefined {
+  for (const record of records) {
+    for (const key of keys) {
+      if (typeof record[key] === "string" && record[key]) return record[key]
+    }
+  }
+}
+
+function firstScalar(records: Record<string, unknown>[], keys: string[]): string | number | undefined {
+  for (const record of records) {
+    for (const key of keys) {
+      const value = record[key]
+      if (typeof value === "string" || typeof value === "number") return value
+    }
+  }
+}
+
+function bounded(value: string): string {
+  return value.slice(0, 500)
 }
 
 async function appendBounded(path: string, record: DiagnosticRecord): Promise<void> {

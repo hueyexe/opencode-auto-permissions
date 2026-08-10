@@ -16,7 +16,7 @@ import type {
   RuntimeContext,
 } from "./types.ts"
 import { parseDecision } from "./verdict.ts"
-import { failureCategory, writeDiagnostic } from "./diagnostics.ts"
+import { describeError, failureCategory, writeDiagnostic } from "./diagnostics.ts"
 
 export interface ReviewerOverrides {
   client?: ReviewerClient
@@ -195,6 +195,7 @@ function writeDecision(
 }
 
 function writeFailure(config: Config, request: PermissionRequest, startedAt: number, error: unknown): void {
+  const described = describeError(error)
   writeDiagnostic(config.diagnosticsPath, {
     timestamp: new Date().toISOString(),
     requestID: request.id,
@@ -205,8 +206,11 @@ function writeFailure(config: Config, request: PermissionRequest, startedAt: num
     elapsedMs: Math.round(performance.now() - startedAt),
     event: "failure",
     failureCategory: failureCategory(error),
-    errorName: error instanceof Error ? error.name : "Error",
-    errorMessage: error instanceof Error ? error.message : String(error),
+    errorName: described.name,
+    errorMessage: described.message,
+    ...(described.tag ? { errorTag: described.tag } : {}),
+    ...(described.code !== undefined ? { errorCode: described.code } : {}),
+    ...(described.status !== undefined ? { errorStatus: described.status } : {}),
   })
 }
 

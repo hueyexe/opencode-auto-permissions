@@ -101,7 +101,7 @@ export function createStableRuntime(
             body: {
               parts: [{
                 type: "text",
-                text: `[Auto Permissions] The requested action was blocked: ${reason} Do not retry it. Briefly report the block to the user, then continue with any remaining safe work.`,
+                text: `[Auto Permissions] The requested action was blocked: ${reason} Do not retry the exact blocked action. Continue the task using a safer alternative when possible; ask the user only if no useful safe path remains.`,
               }],
             },
           })

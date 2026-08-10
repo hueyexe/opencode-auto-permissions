@@ -86,7 +86,7 @@ describe("createStableRuntime", () => {
         body: {
           parts: [{
             type: "text",
-            text: expect.stringContaining("Do not retry it"),
+            text: expect.stringContaining("Continue the task using a safer alternative"),
           }],
         },
       },

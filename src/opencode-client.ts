@@ -94,8 +94,25 @@ export class OpenCodeClientAdapter implements ReviewerClient {
             ...location,
             ...promptBody,
           }
-      const result = unwrapData(await session.prompt(promptInput, { signal: input.signal }))
-      return assistantStructured(result)
+      try {
+        const result = unwrapData(await session.prompt(promptInput, { signal: input.signal }))
+        return assistantStructured(result)
+      } catch (error) {
+        if (!isStructuredOutputError(error)) throw error
+        const fallbackBody = {
+          ...promptBody,
+          format: { type: "text" },
+          parts: [{
+            type: "text",
+            text: `${input.prompt}\n\nStructured output was unavailable. Return only one JSON object without Markdown fences. It must have exactly these three keys:\n- "decision": one of "allow", "deny", or "ask"\n- "reasonCode": lower_snake_case, starting with a letter, at most 64 characters\n- "reason": one non-empty sentence, at most 240 characters\n\nExample: {"decision":"allow","reasonCode":"authorized_action","reason":"The action reasonably supports the user's request."}`,
+          }],
+        }
+        const fallbackInput = stable
+          ? { path: { id: sessionID }, query: location, body: fallbackBody }
+          : { sessionID, ...location, ...fallbackBody }
+        const result = unwrapData(await session.prompt(fallbackInput, { signal: input.signal }))
+        return JSON.parse(assistantText(result))
+      }
     } finally {
       input.signal.removeEventListener("abort", abortRemote)
       if (sessionID && typeof session.delete === "function") {
@@ -151,6 +168,26 @@ function assistantStructured(value: unknown): unknown {
     throw new Error("OpenCode reviewer returned no structured output")
   }
   return value.info.structured
+}
+
+function assistantText(value: unknown): string {
+  if (!isRecord(value)) throw new Error("OpenCode reviewer returned an invalid response")
+  if (isRecord(value.info) && value.info.error) throw value.info.error
+  if (!Array.isArray(value.parts)) throw new Error("OpenCode reviewer returned no text output")
+  const text = value.parts
+    .filter((part): part is Record<string, any> => isRecord(part) && part.type === "text")
+    .map((part) => part.text)
+    .filter((part): part is string => typeof part === "string")
+    .join("")
+    .trim()
+  if (!text) throw new Error("OpenCode reviewer returned no text output")
+  return text
+}
+
+function isStructuredOutputError(error: unknown): boolean {
+  if (!isRecord(error)) return false
+  if (error.name === "StructuredOutputError" || error._tag === "StructuredOutputError") return true
+  return isStructuredOutputError(error.error) || isStructuredOutputError(error.data) || isStructuredOutputError(error.cause)
 }
 
 function unwrapData(result: unknown): unknown {

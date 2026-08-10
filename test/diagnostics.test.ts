@@ -2,9 +2,29 @@ import { describe, expect, test } from "bun:test"
 import { mkdtemp, readFile, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { writeDiagnostic } from "../src/diagnostics.ts"
+import { describeError, failureCategory, writeDiagnostic } from "../src/diagnostics.ts"
 
 describe("diagnostics", () => {
+  test("describes nested SDK error objects", () => {
+    const error = {
+      status: 400,
+      error: {
+        _tag: "ProviderError",
+        code: "invalid_request",
+        data: { message: "Structured output is unavailable." },
+      },
+    }
+
+    expect(describeError(error)).toEqual({
+      name: "Error",
+      message: "Structured output is unavailable.",
+      tag: "ProviderError",
+      code: "invalid_request",
+      status: 400,
+    })
+    expect(failureCategory(error)).toBe("error")
+  })
+
   test("retains only the latest 100 privacy-minimized records", async () => {
     const directory = await mkdtemp(join(tmpdir(), "auto-permissions-diagnostics-"))
     const path = join(directory, "decisions.jsonl")

@@ -131,6 +131,53 @@ describe("OpenCodeClientAdapter", () => {
     expect(deleted).toBeTrue()
   })
 
+  test("falls back to strict JSON text when structured output is unavailable", async () => {
+    const prompts: any[] = []
+    const client = new OpenCodeClientAdapter({
+      session: {
+        create: async () => ({ data: { id: "ses_review" } }),
+        prompt: async (input: any) => {
+          prompts.push(input)
+          if (prompts.length === 1) {
+            return {
+              data: {
+                info: {
+                  error: { name: "StructuredOutputError", data: { message: "No structured output", retries: 1 } },
+                },
+                parts: [],
+              },
+            }
+          }
+          return {
+            data: {
+              info: { role: "assistant" },
+              parts: [{
+                type: "text",
+                text: '{"decision":"allow","reasonCode":"authorized","reason":"Requested by the user."}',
+              }],
+            },
+          }
+        },
+        delete: async () => ({ data: true }),
+      },
+    })
+
+    await expect(client.generate({
+      prompt: "review",
+      model: { providerID: "example", id: "luna-5.6" },
+      parentSessionID: "ses_parent",
+      signal: new AbortController().signal,
+    })).resolves.toEqual({
+      decision: "allow",
+      reasonCode: "authorized",
+      reason: "Requested by the user.",
+    })
+    expect(prompts).toHaveLength(2)
+    expect(prompts[1]).toMatchObject({ format: { type: "text" } })
+    expect(prompts[1].parts[0].text).toContain('exactly these three keys')
+    expect(prompts[1].parts[0].text).toContain('"decision": one of "allow", "deny", or "ask"')
+  })
+
   test("uses the generated stable abort envelope when review is cancelled", async () => {
     const calls: unknown[] = []
     const controller = new AbortController()

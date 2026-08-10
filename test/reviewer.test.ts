@@ -164,7 +164,10 @@ describe("installReviewer", () => {
     expect(app.replies[0]).toMatchObject({ reply: "reject", message: expect.stringContaining("blocked") })
     expect(app.toasts).toEqual(["Blocked"])
     expect(app.resumptions).toEqual([
-      { sessionID: "ses_root", reason: "Uses sudo to elevate privileges." },
+      {
+        sessionID: "ses_root",
+        reason: "Recursively deleting the filesystem root or home directory would cause catastrophic data loss; target only the specific generated directory instead.",
+      },
     ])
     dispose()
   })
