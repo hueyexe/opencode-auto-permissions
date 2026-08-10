@@ -107,6 +107,17 @@ function request(command: string, protocol: PermissionRequest["protocol"] = "v2"
   }
 }
 
+function toolRequest(action: string, resource: string): PermissionRequest {
+  return {
+    id: "per_1",
+    sessionID: "ses_root",
+    action,
+    resources: [resource],
+    source: { type: "tool", messageID: "msg_assistant", callID: "call_1" },
+    protocol: "v2",
+  }
+}
+
 async function settle() {
   await new Promise((resolve) => setTimeout(resolve, 10))
 }
@@ -124,6 +135,21 @@ describe("installReviewer", () => {
       { sessionID: "ses_root", requestID: "per_1", reply: "once", protocol: "v2" },
     ])
     expect(app.toasts).toEqual([])
+    dispose()
+  })
+
+  test("reviews permission actions outside shell and external directory", async () => {
+    const app = harness()
+    app.client.generate = async () => ({ decision: "allow", reasonCode: "requested_read", reason: "Reads a project file." })
+    app.requests.push(toolRequest("read", "src/index.ts"))
+    const dispose = installReviewer(app.context, { client: app.client })
+
+    app.emit("permission.v2.asked", app.requests[0])
+    await settle()
+
+    expect(app.replies).toEqual([
+      { sessionID: "ses_root", requestID: "per_1", reply: "once", protocol: "v2" },
+    ])
     dispose()
   })
 

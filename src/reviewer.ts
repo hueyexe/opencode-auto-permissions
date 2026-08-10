@@ -17,8 +17,6 @@ import type {
 } from "./types.ts"
 import { parseDecision } from "./verdict.ts"
 
-const SUPPORTED_ACTIONS = new Set(["shell", "bash", "external_directory"])
-
 export interface ReviewerOverrides {
   client?: ReviewerClient
   protocols?: PermissionProtocol[]
@@ -45,7 +43,7 @@ export function installReviewer(context: RuntimeContext, overrides: ReviewerOver
 
   const offAsked = context.data.on("permission.v2.asked", (event) => {
     const asked = normalizeAskedEvent(event)
-    if (!asked || !protocols.has(asked.protocol) || !SUPPORTED_ACTIONS.has(asked.action) || inFlight.has(asked.id))
+    if (!asked || !protocols.has(asked.protocol) || inFlight.has(asked.id))
       return
 
     const controller = new AbortController()
@@ -70,7 +68,7 @@ export function installReviewer(context: RuntimeContext, overrides: ReviewerOver
     const asked = normalized && configuredProtocols.length === 1
       ? { ...normalized, protocol: configuredProtocols[0]! }
       : normalized
-    if (!asked || !protocols.has(asked.protocol) || !SUPPORTED_ACTIONS.has(asked.action) || inFlight.has(asked.id))
+    if (!asked || !protocols.has(asked.protocol) || inFlight.has(asked.id))
       return
     const controller = new AbortController()
     inFlight.set(asked.id, controller)
