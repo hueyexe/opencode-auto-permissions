@@ -548,18 +548,22 @@ function installReviewer(context, overrides = {}) {
   const inFlight = new Map;
   const configuredProtocols = overrides.protocols ?? ["stable", "v2"];
   const protocols = new Set(configuredProtocols);
+  writeDiagnostic(config.diagnosticsPath, {
+    timestamp: new Date().toISOString(),
+    event: "plugin_started"
+  });
   client.prewarm?.().catch(() => {
     return;
   });
   const offReplied = context.data.on("permission.v2.replied", (event) => {
     const reply = normalizeRepliedEvent(event);
     if (reply)
-      inFlight.get(reply.requestID)?.abort("permission resolved");
+      cancelReview(config, inFlight, reply.requestID);
   });
   const offStableReplied = context.data.on("permission.replied", (event) => {
     const reply = normalizeRepliedEvent(event);
     if (reply)
-      inFlight.get(reply.requestID)?.abort("permission resolved");
+      cancelReview(config, inFlight, reply.requestID);
   });
   const offAsked = context.data.on("permission.v2.asked", (event) => {
     const asked = normalizeAskedEvent(event);
@@ -567,6 +571,7 @@ function installReviewer(context, overrides = {}) {
       return;
     const controller = new AbortController;
     const startedAt = performance.now();
+    writeReceived(config, asked);
     inFlight.set(asked.id, controller);
     reviewAndReply(context, client, config, asked, controller.signal, overrides, startedAt).catch((error) => {
       if (controller.signal.aborted)
@@ -591,6 +596,7 @@ function installReviewer(context, overrides = {}) {
       return;
     const controller = new AbortController;
     const startedAt = performance.now();
+    writeReceived(config, asked);
     inFlight.set(asked.id, controller);
     reviewAndReply(context, client, config, asked, controller.signal, overrides, startedAt).catch((error) => {
       if (controller.signal.aborted)
@@ -675,7 +681,7 @@ function writeDecision(config, request, startedAt, decision, source, replyResult
     action: request.action,
     resourceCount: request.resources.length,
     elapsedMs: Math.round(performance.now() - startedAt),
-    outcome: "decision",
+    event: "decision",
     source,
     decision: decision.kind,
     reasonCode: decision.reasonCode,
@@ -693,11 +699,33 @@ function writeFailure(config, request, startedAt, error) {
     action: request.action,
     resourceCount: request.resources.length,
     elapsedMs: Math.round(performance.now() - startedAt),
-    outcome: "failure",
+    event: "failure",
     failureCategory: failureCategory(error),
     errorName: error instanceof Error ? error.name : "Error",
     errorMessage: error instanceof Error ? error.message : String(error)
   });
+}
+function writeReceived(config, request) {
+  writeDiagnostic(config.diagnosticsPath, {
+    timestamp: new Date().toISOString(),
+    event: "request_received",
+    requestID: request.id,
+    sessionID: request.sessionID,
+    protocol: request.protocol,
+    action: request.action,
+    resourceCount: request.resources.length
+  });
+}
+function cancelReview(config, inFlight, requestID) {
+  const controller = inFlight.get(requestID);
+  if (!controller || controller.signal.aborted)
+    return;
+  writeDiagnostic(config.diagnosticsPath, {
+    timestamp: new Date().toISOString(),
+    event: "request_cancelled",
+    requestID
+  });
+  controller.abort("permission resolved");
 }
 async function modelDecision(context, client, config, input, parentSignal) {
   const timeout = new AbortController;

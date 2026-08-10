@@ -8,13 +8,13 @@ const queues = new Map<string, Promise<void>>()
 
 export interface DiagnosticRecord {
   timestamp: string
-  requestID: string
-  sessionID: string
-  protocol: PermissionRequest["protocol"]
-  action: string
-  resourceCount: number
-  elapsedMs: number
-  outcome: "decision" | "failure"
+  event: "plugin_started" | "request_received" | "request_cancelled" | "decision" | "failure"
+  requestID?: string
+  sessionID?: string
+  protocol?: PermissionRequest["protocol"]
+  action?: string
+  resourceCount?: number
+  elapsedMs?: number
   source?: "policy" | "model"
   decision?: Decision["kind"]
   reasonCode?: string

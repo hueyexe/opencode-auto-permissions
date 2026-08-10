@@ -12,13 +12,13 @@ describe("diagnostics", () => {
       for (let index = 0; index < 105; index++) {
         writeDiagnostic(path, {
           timestamp: new Date(index).toISOString(),
+          event: "decision",
           requestID: `per_${index}`,
           sessionID: "ses_test",
           protocol: "stable",
           action: "bash",
           resourceCount: 1,
           elapsedMs: index,
-          outcome: "decision",
           decision: "allow",
         })
       }
