@@ -186,6 +186,28 @@ describe("installReviewer", () => {
     dispose()
   })
 
+  test("leaves a timed-out review pending for manual approval", async () => {
+    const app = harness({ model: "openai/gpt-5.6-luna", timeoutMs: 100 })
+    app.client.generate = ({ signal }) => new Promise((_resolve, reject) => {
+      signal.addEventListener("abort", () => reject(new DOMException("Review aborted", "AbortError")), { once: true })
+    })
+    app.requests.push(request("git push origin feature"))
+    const failures: unknown[] = []
+    const dispose = installReviewer(app.context, {
+      client: app.client,
+      onFailure: (_request, error) => failures.push(error),
+    })
+
+    app.emit("permission.v2.asked", app.requests[0])
+    await new Promise((resolve) => setTimeout(resolve, 120))
+
+    expect(app.replies).toEqual([])
+    expect(app.requests).toHaveLength(1)
+    expect(app.toasts).toEqual(["Auto Permissions unavailable"])
+    expect(failures).toHaveLength(1)
+    dispose()
+  })
+
   test("cancels a review when another actor replies first", async () => {
     const app = harness()
     app.requests.push(request("git push origin feature"))
