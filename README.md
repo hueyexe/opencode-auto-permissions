@@ -1,7 +1,7 @@
 # OpenCode Auto Permissions
 
 [![release](https://img.shields.io/github/v/release/hueyexe/opencode-auto-permissions.svg)](https://github.com/hueyexe/opencode-auto-permissions/releases)
-[![tests](https://img.shields.io/badge/tests-62%20passing-brightgreen.svg)](./test)
+[![tests](https://img.shields.io/badge/tests-67%20passing-brightgreen.svg)](./test)
 [![TypeScript](https://img.shields.io/badge/TypeScript-strict-blue.svg)](./tsconfig.json)
 [![OpenCode](https://img.shields.io/badge/OpenCode-stable%20%2B%20V2-blue.svg)](./docs/COMPATIBILITY_SPIKE.md)
 [![license](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
@@ -21,7 +21,7 @@ Add the tagged Git package, reviewer model, and risk-based permission rules to y
   "plugin": [
     [
       "opencode-auto-permissions@git+https://github.com/hueyexe/opencode-auto-permissions.git#v0.1.0",
-      { "model": "openai/gpt-5.6-luna" }
+      { "model": "openai/gpt-5.6-luna", "variant": "low" }
     ]
   ],
   "permission": {
@@ -44,7 +44,7 @@ Add the tagged Git package, reviewer model, and risk-based permission rules to y
 
 OpenCode uses the last matching permission rule, so keep the broad `"*": "allow"` rule first and the narrower `ask` rules after it. Adapt the list to your environment: deployments, infrastructure commands, package publication, and production database tools are good candidates for contextual review.
 
-Use any configured model in `provider/model` form. A fast, reliable model that follows JSON instructions works best. Restart OpenCode after changing the config.
+Use any configured model in `provider/model` form. A fast, reliable model that follows JSON instructions works best. Set `variant` to the model's low-reasoning variant when available: permission decisions need some contextual reasoning, but deep reasoning adds unnecessary latency. Restart OpenCode after changing the config.
 
 V2 users must add the same plugin tuple to `~/.config/opencode/tui.json` so the TUI adapter can resolve V2 permission events:
 
@@ -53,7 +53,7 @@ V2 users must add the same plugin tuple to `~/.config/opencode/tui.json` so the 
   "plugin": [
     [
       "opencode-auto-permissions@git+https://github.com/hueyexe/opencode-auto-permissions.git#v0.1.0",
-      { "model": "openai/gpt-5.6-luna" }
+      { "model": "openai/gpt-5.6-luna", "variant": "low" }
     ]
   ]
 }
@@ -100,6 +100,7 @@ The plugin tuple accepts these options:
 | Option | Default | Description |
 | --- | --- | --- |
 | `model` | Required | Reviewer model in `provider/model` form. |
+| `variant` | Provider default | Optional reviewer-only model variant. Use `"low"` when supported for faster decisions. |
 | `timeoutMs` | `8000` | Review timeout from 100 to 30,000 milliseconds. |
 | `userMessageCount` | `4` | Recent user messages included in review context, from 1 to 20. |
 | `shadow` | `false` | Evaluate and record decisions without replying to permission requests. |
@@ -113,6 +114,8 @@ With `debug: true`, diagnostics are written to `$XDG_STATE_HOME/opencode/auto-pe
 Access to this bounded diagnostics file is deterministically allowed by the plugin so troubleshooting cannot be blocked by speculative sensitivity concerns. This exception applies only to Auto Permissions' own `decisions.jsonl` path.
 
 Reviewer sessions are standalone rather than children of the active coding session. This keeps reviewer model and variant state isolated from the main agent and its displayed reasoning level.
+
+The plugin does not force a universal reasoning level because variant names differ by provider. The quick start explicitly uses `"low"`; omitting `variant` uses the provider default. Avoid high or maximum reasoning for permission review unless your policy requires unusually complex analysis.
 
 ## Compatibility
 

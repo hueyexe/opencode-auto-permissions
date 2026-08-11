@@ -28,9 +28,10 @@ export function parseConfig(options: Readonly<Record<string, unknown>>): Config 
   const providerID = modelValue.slice(0, slash).trim()
   const id = modelValue.slice(slash + 1).trim()
   if (!providerID || !id) throw new Error('Auto Permissions model must use "provider/model" form')
+  const variant = parseVariant(options.variant)
 
   return {
-    model: { providerID, id },
+    model: { providerID, id, ...(variant ? { variant } : {}) },
     modelLabel: modelValue,
     timeoutMs: boundedInteger(options.timeoutMs, DEFAULT_TIMEOUT_MS, 100, 30_000, "timeoutMs"),
     userMessageCount: boundedInteger(
@@ -44,6 +45,12 @@ export function parseConfig(options: Readonly<Record<string, unknown>>): Config 
     runtime: parseRuntime(options.runtime),
     diagnosticsPath: parseDiagnosticsPath(options.debug),
   }
+}
+
+function parseVariant(value: unknown): string | undefined {
+  if (value === undefined) return undefined
+  if (typeof value === "string" && value.trim()) return value.trim()
+  throw new Error("Auto Permissions variant must be a non-empty string")
 }
 
 function parseDiagnosticsPath(value: unknown): string | undefined {

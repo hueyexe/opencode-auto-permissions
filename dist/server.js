@@ -151,8 +151,9 @@ function parseConfig(options) {
   const id = modelValue.slice(slash + 1).trim();
   if (!providerID || !id)
     throw new Error('Auto Permissions model must use "provider/model" form');
+  const variant = parseVariant(options.variant);
   return {
-    model: { providerID, id },
+    model: { providerID, id, ...variant ? { variant } : {} },
     modelLabel: modelValue,
     timeoutMs: boundedInteger(options.timeoutMs, DEFAULT_TIMEOUT_MS, 100, 30000, "timeoutMs"),
     userMessageCount: boundedInteger(options.userMessageCount, DEFAULT_USER_MESSAGE_COUNT, 1, 20, "userMessageCount"),
@@ -160,6 +161,13 @@ function parseConfig(options) {
     runtime: parseRuntime(options.runtime),
     diagnosticsPath: parseDiagnosticsPath(options.debug)
   };
+}
+function parseVariant(value) {
+  if (value === undefined)
+    return;
+  if (typeof value === "string" && value.trim())
+    return value.trim();
+  throw new Error("Auto Permissions variant must be a non-empty string");
 }
 function parseDiagnosticsPath(value) {
   if (value === undefined || value === false)

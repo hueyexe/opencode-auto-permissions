@@ -21,6 +21,15 @@ describe("parseConfig", () => {
     })
   })
 
+  test("applies an optional reviewer variant", () => {
+    expect(parseConfig({ model: "openai/gpt-5.6-luna", variant: "low" }).model).toEqual({
+      providerID: "openai",
+      id: "gpt-5.6-luna",
+      variant: "low",
+    })
+    expect(() => parseConfig({ model: "a/b", variant: "" })).toThrow(/variant/)
+  })
+
   test.each([{}, { model: "gpt-5.6-luna" }, { model: "/gpt-5.6-luna" }, { model: "provider/" }])(
     "rejects invalid model option %#",
     (options) => expect(() => parseConfig(options)).toThrow(),
