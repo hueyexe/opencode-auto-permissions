@@ -80,7 +80,11 @@ function harness(options: Record<string, unknown> = { model: "openai/gpt-5.6-lun
   }
 
   const client: ReviewerClient = {
-    generate: async () => ({ decision: "ask", reasonCode: "ambiguous", reason: "Needs review." }),
+    generate: async () => ({
+      decision: "deny",
+      reasonCode: "missing_authorization",
+      reason: "Authorization is missing; continue with a safer alternative.",
+    }),
     async reply(input) {
       replies.push(input)
       const index = requests.findIndex((request) => request.id === input.requestID)
@@ -259,7 +263,7 @@ describe("installReviewer", () => {
     dispose()
   })
 
-  test("leaves an ask verdict pending", async () => {
+  test("resolves a deny verdict with helpful continuation", async () => {
     const app = harness()
     app.requests.push(request("git push origin feature"))
     const dispose = installReviewer(app.context, { client: app.client })
@@ -267,16 +271,19 @@ describe("installReviewer", () => {
     app.emit("permission.v2.asked", app.requests[0])
     await settle()
 
-    expect(app.replies).toEqual([])
-    expect(app.requests).toHaveLength(1)
-    expect(app.toasts).toEqual(["Manual approval"])
+    expect(app.replies[0]).toMatchObject({ reply: "reject", message: expect.stringContaining("safer alternative") })
+    expect(app.requests).toHaveLength(0)
+    expect(app.toasts).toEqual(["Blocked"])
+    expect(app.resumptions).toEqual([
+      { sessionID: "ses_root", reason: "Authorization is missing; continue with a safer alternative." },
+    ])
     dispose()
   })
 
-  test("leaves a timed-out review pending for manual approval", async () => {
+  test("rejects a timed-out review and resumes with safer guidance", async () => {
     const app = harness({ model: "openai/gpt-5.6-luna", timeoutMs: 100 })
     app.client.generate = ({ signal }) => new Promise((_resolve, reject) => {
-      signal.addEventListener("abort", () => reject(new DOMException("Review aborted", "AbortError")), { once: true })
+      signal.addEventListener("abort", () => reject(new Error("Review timed out")), { once: true })
     })
     app.requests.push(request("git push origin feature"))
     const failures: unknown[] = []
@@ -288,10 +295,26 @@ describe("installReviewer", () => {
     app.emit("permission.v2.asked", app.requests[0])
     await new Promise((resolve) => setTimeout(resolve, 120))
 
-    expect(app.replies).toEqual([])
-    expect(app.requests).toHaveLength(1)
-    expect(app.toasts).toEqual(["Auto Permissions unavailable"])
+    expect(app.replies[0]).toMatchObject({ reply: "reject", message: expect.stringContaining("timed out") })
+    expect(app.requests).toHaveLength(0)
+    expect(app.toasts).toEqual(["Blocked"])
+    expect(app.resumptions[0]?.reason).toContain("narrower or lower-risk step")
     expect(failures).toHaveLength(1)
+    dispose()
+  })
+
+  test("rejects a provider failure and resumes with safer guidance", async () => {
+    const app = harness()
+    app.client.generate = async () => { throw new Error("provider unavailable") }
+    app.requests.push(request("git push origin feature"))
+    const dispose = installReviewer(app.context, { client: app.client })
+
+    app.emit("permission.v2.asked", app.requests[0])
+    await settle()
+
+    expect(app.replies[0]).toMatchObject({ reply: "reject", message: expect.stringContaining("review failed") })
+    expect(app.requests).toHaveLength(0)
+    expect(app.resumptions[0]?.reason).toContain("narrower or lower-risk step")
     dispose()
   })
 

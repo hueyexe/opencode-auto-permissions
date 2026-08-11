@@ -13,7 +13,7 @@ The product contract is:
 4. Routine work proceeds without user interaction.
 5. Clearly unsafe work is blocked automatically with corrective feedback.
 6. Ambiguous work keeps OpenCode's native approval prompt.
-7. Reviewer failures always fall back to manual approval.
+7. Reviewer failures fail closed and resume the agent with safer-alternative guidance.
 
 GPT-5.6 Luna is the development and initial evaluation model. It must not be
 hard-coded as a runtime default, fallback, or provider dependency.
@@ -91,16 +91,16 @@ Blocked · Conflicts with your instruction not to push.
 - Do not notify the desktop unless a human response is required.
 - Stop equivalent retry loops after three automatic blocks in one turn.
 
-### Manual approval
+### Uncertain requests
 
-- Send no permission reply, leaving OpenCode's native prompt active.
-- Show one concise reason:
+- Reject the request rather than leaving a human prompt active.
+- Return one concise reason and a safer alternative to the main agent:
 
 ```text
-Manual approval · Adds an unrequested dependency.
+Blocked · Dependency authorization is missing; inspect existing dependencies or propose the addition instead.
 ```
 
-- Notify through OpenCode's attention API only when the terminal is unfocused.
+- Continue autonomously with the safer path when possible.
 
 ### Degraded
 
@@ -108,10 +108,10 @@ On timeout, invalid output, missing model, provider failure, or an internal
 plugin error:
 
 ```text
-Auto Permissions unavailable · Manual approval required
+Blocked · Permission review failed; continue with a narrower or lower-risk step.
 ```
 
-Rate-limit this feedback. Never turn a reviewer failure into an approval.
+Rate-limit this feedback. Never turn a reviewer failure into an approval or an unresolved prompt.
 
 ### Transparency
 
@@ -403,7 +403,7 @@ model catalog. Do not contain provider-specific SDK calls, API keys, model
 aliases, pricing assumptions, or fallback models.
 
 The configured model must support ordinary text generation. Models that fail
-strict output validation simply cause manual approval.
+strict output validation cause automatic rejection with safer-alternative guidance.
 
 ### Isolated structured request
 
@@ -606,14 +606,14 @@ permission replies and meets the hard-risk evaluation gate.
 
 Deliverables:
 
-- Allow-once, reject-with-feedback, and abstain flow.
+- Allow-once, guarded session approval, and reject-with-feedback flow.
 - Abort and first-reply-wins handling.
 - Equivalent-denial circuit breaker.
-- Timeouts and provider failures fall back to manual.
+- Timeouts and provider failures fail closed and resume with safer guidance.
 - No persistent approval or verdict cache.
 
 Exit criterion: integration tests prove no late reviewer response can replace
-an earlier human decision.
+an earlier resolved decision.
 
 ### Milestone 4: Quiet TUI UX
 

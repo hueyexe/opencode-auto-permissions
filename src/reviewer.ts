@@ -56,16 +56,9 @@ export function installReviewer(context: RuntimeContext, overrides: ReviewerOver
     writeReceived(config, asked)
     inFlight.set(asked.id, controller)
     void reviewAndReply(context, client, config, asked, controller.signal, overrides, startedAt)
-      .catch((error) => {
+      .catch(async (error) => {
         if (controller.signal.aborted) return
-        writeFailure(config, asked, startedAt, error)
-        overrides.onFailure?.(asked, error)
-        context.showToast?.({
-          title: "Auto Permissions unavailable",
-          message: "Manual approval required.",
-          variant: "warning",
-          duration: 4_000,
-        })
+        await rejectAfterFailure(context, client, config, asked, startedAt, error, overrides)
       })
       .finally(() => {
         if (inFlight.get(asked.id) === controller) inFlight.delete(asked.id)
@@ -83,16 +76,9 @@ export function installReviewer(context: RuntimeContext, overrides: ReviewerOver
     writeReceived(config, asked)
     inFlight.set(asked.id, controller)
     void reviewAndReply(context, client, config, asked, controller.signal, overrides, startedAt)
-      .catch((error) => {
+      .catch(async (error) => {
         if (controller.signal.aborted) return
-        writeFailure(config, asked, startedAt, error)
-        overrides.onFailure?.(asked, error)
-        context.showToast?.({
-          title: "Auto Permissions unavailable",
-          message: "Manual approval required.",
-          variant: "warning",
-          duration: 4_000,
-        })
+        await rejectAfterFailure(context, client, config, asked, startedAt, error, overrides)
       })
       .finally(() => {
         if (inFlight.get(asked.id) === controller) inFlight.delete(asked.id)
@@ -131,17 +117,6 @@ async function reviewAndReply(
     return
   }
 
-  if (decision.kind === "ask") {
-    context.showToast?.({
-      title: "Manual approval",
-      message: decision.reason,
-      variant: "info",
-      duration: 4_000,
-    })
-    writeDecision(config, request, startedAt, decision, policyDecision ? "policy" : "model", "manual")
-    return
-  }
-
   const pending = await isRequestPending(context, request)
   if (!pending || parentSignal.aborted) return
 
@@ -177,6 +152,34 @@ async function reviewAndReply(
   context.showToast?.({ title: "Blocked", message: decision.reason, variant: "warning", duration: 4_000 })
   writeDecision(config, request, startedAt, decision, policyDecision ? "policy" : "model", result)
   if (result === "replied") context.resumeAfterDenial?.(request.sessionID, decision.reason)
+}
+
+async function rejectAfterFailure(
+  context: RuntimeContext,
+  client: ReviewerClient,
+  config: Config,
+  request: PermissionRequest,
+  startedAt: number,
+  error: unknown,
+  overrides: ReviewerOverrides,
+): Promise<void> {
+  writeFailure(config, request, startedAt, error)
+  overrides.onFailure?.(request, error)
+  if (config.shadow || !(await isRequestPending(context, request))) return
+
+  const category = failureCategory(error)
+  const reason = category === "timeout"
+    ? "Permission review timed out, so the action was blocked; continue with a narrower or lower-risk step and retry only if needed."
+    : "Permission review failed, so the action was blocked; continue with a narrower or lower-risk step and retry only if needed."
+  const result = await client.reply({
+    sessionID: request.sessionID,
+    requestID: request.id,
+    reply: "reject",
+    message: `Auto Permissions blocked this action: ${reason}`,
+    protocol: request.protocol,
+  })
+  context.showToast?.({ title: "Blocked", message: reason, variant: "warning", duration: 4_000 })
+  if (result === "replied") context.resumeAfterDenial?.(request.sessionID, reason)
 }
 
 function eligibleForSessionApproval(

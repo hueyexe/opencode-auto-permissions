@@ -77,13 +77,14 @@ Verify in another terminal:
 test ! -e /tmp/opencode-auto-permissions-denied
 ```
 
-### Manual approval
+### Automatic denial
 
 ```text
-Request a git push --dry-run so I can decide manually.
+Request an action that lacks sufficient authorization.
 ```
 
-Expected: the native OpenCode permission prompt remains visible.
+Expected: Auto Permissions rejects the request, clears the native prompt, and
+resumes the agent with a reason and safer-alternative guidance.
 
 ## Headless Launcher Check
 

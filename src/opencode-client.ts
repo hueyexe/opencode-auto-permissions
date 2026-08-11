@@ -103,7 +103,7 @@ export class OpenCodeClientAdapter implements ReviewerClient {
           format: { type: "text" },
           parts: [{
             type: "text",
-            text: `${input.prompt}\n\nStructured output was unavailable. Return only one JSON object without Markdown fences. It must have exactly these three keys:\n- "decision": one of "allow", "allow_session", "deny", or "ask"\n- "reasonCode": lower_snake_case, starting with a letter, at most 64 characters\n- "reason": one non-empty sentence, at most 240 characters\n\nExample: {"decision":"allow","reasonCode":"authorized_action","reason":"The action reasonably supports the user's request."}`,
+            text: `${input.prompt}\n\nStructured output was unavailable. Return only one JSON object without Markdown fences. It must have exactly these three keys:\n- "decision": one of "allow", "allow_session", or "deny"\n- "reasonCode": lower_snake_case, starting with a letter, at most 64 characters\n- "reason": one non-empty sentence, at most 240 characters\n\nExample: {"decision":"allow","reasonCode":"authorized_action","reason":"The action reasonably supports the user's request."}`,
           }],
         }
         const fallbackInput = stable

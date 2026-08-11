@@ -19,7 +19,6 @@ export type Decision =
   | { kind: "allow"; reasonCode: string; reason: string }
   | { kind: "allow_session"; reasonCode: string; reason: string }
   | { kind: "deny"; reasonCode: string; reason: string }
-  | { kind: "ask"; reasonCode: string; reason: string }
 
 export interface ReviewInput {
   request: {

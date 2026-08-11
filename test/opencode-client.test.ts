@@ -30,7 +30,7 @@ describe("OpenCodeClientAdapter", () => {
             data: {
               info: {
                 role: "assistant",
-                structured: { decision: "ask", reasonCode: "x", reason: "Review." },
+                structured: { decision: "deny", reasonCode: "x", reason: "Review." },
               },
               parts: [],
             },
@@ -50,7 +50,7 @@ describe("OpenCodeClientAdapter", () => {
       signal: new AbortController().signal,
     })
 
-    expect(text).toEqual({ decision: "ask", reasonCode: "x", reason: "Review." })
+    expect(text).toEqual({ decision: "deny", reasonCode: "x", reason: "Review." })
     expect(calls.map((call) => call.method)).toEqual(["create", "prompt", "delete"])
     expect(calls[0]?.input).toMatchObject({
       agent: "auto-permissions-reviewer",
@@ -89,7 +89,7 @@ describe("OpenCodeClientAdapter", () => {
           },
           prompt: async () => {
             calls.push("v2-prompt")
-            return { data: { info: { structured: { decision: "ask", reasonCode: "x", reason: "Review." } } } }
+            return { data: { info: { structured: { decision: "deny", reasonCode: "x", reason: "Review." } } } }
           },
           delete: async () => calls.push("v2-delete"),
         },
@@ -175,7 +175,7 @@ describe("OpenCodeClientAdapter", () => {
     expect(prompts).toHaveLength(2)
     expect(prompts[1]).toMatchObject({ format: { type: "text" } })
     expect(prompts[1].parts[0].text).toContain('exactly these three keys')
-    expect(prompts[1].parts[0].text).toContain('"decision": one of "allow", "allow_session", "deny", or "ask"')
+    expect(prompts[1].parts[0].text).toContain('"decision": one of "allow", "allow_session", or "deny"')
   })
 
   test("uses the generated stable abort envelope when review is cancelled", async () => {

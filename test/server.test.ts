@@ -17,7 +17,7 @@ function pluginInput() {
         messages: async () => ({ data: [] }),
         create: async () => ({ data: { id: "ses_review" } }),
         prompt: async () => ({
-          data: { info: { structured: { decision: "ask", reasonCode: "test", reason: "Test." } } },
+          data: { info: { structured: { decision: "deny", reasonCode: "test", reason: "Test." } } },
         }),
         delete: async () => ({ data: true }),
       },

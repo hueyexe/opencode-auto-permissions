@@ -19,6 +19,7 @@ describe("parseDecision", () => {
     null,
     { decision: "allow", reasonCode: "x", reason: "ok", extra: true },
     { decision: "SAFE", reasonCode: "x", reason: "ok" },
+    { decision: "ask", reasonCode: "x", reason: "Needs a human." },
     { decision: "allow", reasonCode: "Not-Snake", reason: "ok" },
     { decision: "allow", reasonCode: "x", reason: "" },
   ])("rejects malformed output %#", (value) => {

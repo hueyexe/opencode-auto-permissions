@@ -75,7 +75,7 @@ target sub-1.5-second P95 UX.
   missing from generated TypeScript declarations.
 - `retryCount` is accepted in the structured-output request, but this beta
   reports structured-output failures with `retries: 0`. The plugin fails to
-  manual approval rather than parsing malformed model text.
+  automatic rejection rather than parsing malformed model text.
 - The pinned beta emits transitional `permission.asked` events and stores them
   in the legacy queue even when the V2 TUI owns review. The adapter claims those
   events and falls back to the legacy reply endpoint only after a session-scoped
