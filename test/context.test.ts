@@ -8,16 +8,16 @@ describe("review context isolation", () => {
     expect(
       normalizeAskedEvent({
         type: "permission.asked",
-        data: { id: "per_v2", sessionID: "ses_1", action: "shell", resources: ["git status"] },
+        data: { id: "per_v2", sessionID: "ses_1", action: "shell", resources: ["git status"], always: ["git status*"] },
       }),
-    ).toMatchObject({ id: "per_v2", action: "shell", protocol: "v2" })
+    ).toMatchObject({ id: "per_v2", action: "shell", always: ["git status*"], protocol: "v2" })
 
     expect(
       normalizeAskedEvent({
         type: "permission.asked",
-        data: { id: "per_stable", sessionID: "ses_1", permission: "bash", patterns: ["git status"] },
+        data: { id: "per_stable", sessionID: "ses_1", permission: "bash", patterns: ["git status"], always: ["git status*"] },
       }),
-    ).toMatchObject({ id: "per_stable", action: "bash", protocol: "stable" })
+    ).toMatchObject({ id: "per_stable", action: "bash", always: ["git status*"], protocol: "stable" })
   })
 
   test("includes only real human text and excludes ambient or agent content", async () => {
@@ -60,6 +60,7 @@ describe("review context isolation", () => {
       sessionID: "ses_root",
       action: "bash",
       resources: ["git push origin feature"],
+      always: [],
       protocol: "stable",
     }
 
@@ -67,6 +68,7 @@ describe("review context isolation", () => {
     const prompt = buildReviewPrompt(input)
 
     expect(input.context.userMessages).toEqual(["Real human instruction"])
+    expect(input.request.sessionPatterns).toEqual([])
     expect(prompt).toContain("Real human instruction")
     expect(prompt).not.toContain("DEFAULT SYSTEM PROMPT")
     expect(prompt).not.toContain("IGNORED PLUGIN INSTRUCTION")

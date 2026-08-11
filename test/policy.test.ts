@@ -4,7 +4,7 @@ import type { ReviewInput } from "../src/types.ts"
 
 function input(command: string): ReviewInput {
   return {
-    request: { action: "shell", resources: [command], toolInput: { command } },
+    request: { action: "shell", resources: [command], sessionPatterns: [], toolInput: { command } },
     context: { rootSessionID: "ses_root", userMessages: [] },
   }
 }
@@ -18,7 +18,7 @@ describe("applyDeterministicPolicy", () => {
   test("sends credential directory access to the model for contextual review", () => {
     expect(
       applyDeterministicPolicy({
-        request: { action: "external_directory", resources: ["/home/user/.ssh/*"] },
+        request: { action: "external_directory", resources: ["/home/user/.ssh/*"], sessionPatterns: [] },
         context: { rootSessionID: "ses_root", userMessages: [] },
       }),
     ).toBeNull()
@@ -30,6 +30,7 @@ describe("applyDeterministicPolicy", () => {
         request: {
           action: "external_directory",
           resources: ["/home/user/.local/state/opencode/auto-permissions/*"],
+          sessionPatterns: [],
           toolInput: { filePath: "/home/user/.local/state/opencode/auto-permissions/decisions.jsonl" },
         },
         context: { rootSessionID: "ses_root", userMessages: [] },
@@ -43,6 +44,7 @@ describe("applyDeterministicPolicy", () => {
         request: {
           action: "external_directory",
           resources: ["/home/user/.local/state/opencode/auto-permissions/*"],
+          sessionPatterns: [],
         },
         context: { rootSessionID: "ses_root", userMessages: [] },
       })?.reasonCode,
@@ -75,7 +77,7 @@ describe("applyDeterministicPolicy", () => {
   test("denies a matching external boundary the latest human message explicitly prohibits", () => {
     expect(
       applyDeterministicPolicy({
-        request: { action: "external_directory", resources: ["/tmp/*"] },
+        request: { action: "external_directory", resources: ["/tmp/*"], sessionPatterns: [] },
         context: {
           rootSessionID: "ses_root",
           userMessages: ["Do not execute `touch /tmp/example`."],

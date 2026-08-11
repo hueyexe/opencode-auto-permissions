@@ -77,7 +77,7 @@ compact reviewer request should make this uncommon and short-lived.
 - Remove the native prompt by resolving it.
 - Continue silently.
 - Record the decision in in-memory history.
-- Never use `always` on the user's behalf.
+- Use `always` only when the reviewer explicitly selects guarded session approval and OpenCode supplies narrow matching patterns.
 
 ### Blocked
 

@@ -9,6 +9,7 @@ describe("parseConfig", () => {
       timeoutMs: 8_000,
       userMessageCount: 4,
       shadow: false,
+      sessionApprovals: true,
       runtime: "auto",
       diagnosticsPath: undefined,
     })
@@ -44,6 +45,11 @@ describe("parseConfig", () => {
     expect(parseConfig({ model: "a/b", runtime: "stable" }).runtime).toBe("stable")
     expect(parseConfig({ model: "a/b", runtime: "v2" }).runtime).toBe("v2")
     expect(() => parseConfig({ model: "a/b", runtime: "other" })).toThrow(/runtime/)
+  })
+
+  test("allows session approvals to be disabled", () => {
+    expect(parseConfig({ model: "a/b" }).sessionApprovals).toBeTrue()
+    expect(parseConfig({ model: "a/b", sessionApprovals: false }).sessionApprovals).toBeFalse()
   })
 
   test("enables bounded diagnostics with a default or explicit path", () => {

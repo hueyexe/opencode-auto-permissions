@@ -1,7 +1,7 @@
 # OpenCode Auto Permissions
 
 [![release](https://img.shields.io/github/v/release/hueyexe/opencode-auto-permissions.svg)](https://github.com/hueyexe/opencode-auto-permissions/releases)
-[![tests](https://img.shields.io/badge/tests-67%20passing-brightgreen.svg)](./test)
+[![tests](https://img.shields.io/badge/tests-78%20passing-brightgreen.svg)](./test)
 [![TypeScript](https://img.shields.io/badge/TypeScript-strict-blue.svg)](./tsconfig.json)
 [![OpenCode](https://img.shields.io/badge/OpenCode-stable%20%2B%20V2-blue.svg)](./docs/COMPATIBILITY_SPIKE.md)
 [![license](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
@@ -20,7 +20,7 @@ Add the tagged Git package, reviewer model, and risk-based permission rules to y
 {
   "plugin": [
     [
-      "opencode-auto-permissions@git+https://github.com/hueyexe/opencode-auto-permissions.git#v0.1.0",
+      "opencode-auto-permissions@git+https://github.com/hueyexe/opencode-auto-permissions.git#v0.2.0",
       { "model": "openai/gpt-5.6-luna", "variant": "low" }
     ]
   ],
@@ -52,7 +52,7 @@ V2 users must add the same plugin tuple to `~/.config/opencode/tui.json` so the 
 {
   "plugin": [
     [
-      "opencode-auto-permissions@git+https://github.com/hueyexe/opencode-auto-permissions.git#v0.1.0",
+      "opencode-auto-permissions@git+https://github.com/hueyexe/opencode-auto-permissions.git#v0.2.0",
       { "model": "openai/gpt-5.6-luna", "variant": "low" }
     ]
   ]
@@ -75,7 +75,13 @@ For each supported permission request, Auto Permissions combines deterministic s
 - Reviewer sessions are hidden, have no tools, and deny all permissions.
 - Only a small, recent window of relevant user context is sent for review.
 
-The reviewer never receives authority to execute the requested action. It can only grant one-time approval, reject the request, or abstain. It never grants permanent `always` permission.
+The reviewer never receives authority to execute the requested action. It can approve once, approve narrow matching requests for the current session, reject, or abstain. Session approvals are held in memory by OpenCode and do not persist to later sessions.
+
+### Session Approvals
+
+For repeatable low-risk operations, the reviewer may choose `allow_session`. The plugin then uses OpenCode's own tool-provided `always` patterns, so future matching requests in that session bypass another model call. It never invents or broadens a permission pattern.
+
+Code-side guardrails downgrade `allow_session` to a one-time approval when patterns are missing or broad, or when the action involves edits, external-directory boundaries, `sudo`, deletion, push, publish, deploy, credentials, destructive Git, or other non-repeatable effects. Eligible examples include narrow reads/searches and commands such as a specific `git fetch` or test invocation. Set `sessionApprovals: false` to force all model approvals to remain one-time.
 
 When an action is rejected, Auto Permissions returns the reason to the main agent and asks it to continue with a safer alternative when possible. For example, it can target a generated subdirectory instead of a broad recursive delete, use `--force-with-lease` instead of an unrestricted force push, or inspect a deployment plan before applying it. A denial should redirect useful work rather than end the session.
 
@@ -101,6 +107,7 @@ The plugin tuple accepts these options:
 | --- | --- | --- |
 | `model` | Required | Reviewer model in `provider/model` form. |
 | `variant` | Provider default | Optional reviewer-only model variant. Use `"low"` when supported for faster decisions. |
+| `sessionApprovals` | `true` | Allow guarded, pattern-specific approvals for the current OpenCode session. Set `false` for one-time approvals only. |
 | `timeoutMs` | `8000` | Review timeout from 100 to 30,000 milliseconds. |
 | `userMessageCount` | `4` | Recent user messages included in review context, from 1 to 20. |
 | `shadow` | `false` | Evaluate and record decisions without replying to permission requests. |
@@ -119,7 +126,7 @@ The plugin does not force a universal reasoning level because variant names diff
 
 ## Compatibility
 
-Release `v0.1.0` has been acceptance-tested in the real TUI with:
+Release `v0.2.0` has been acceptance-tested in the real TUI with:
 
 - OpenCode stable `1.18.12`
 - OpenCode V2 `0.0.0-beta-202608040144`

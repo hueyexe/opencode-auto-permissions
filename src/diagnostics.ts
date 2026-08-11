@@ -17,6 +17,7 @@ export interface DiagnosticRecord {
   elapsedMs?: number
   source?: "policy" | "model"
   decision?: Decision["kind"]
+  approvalScope?: "once" | "session"
   reasonCode?: string
   reason?: string
   shadow?: boolean

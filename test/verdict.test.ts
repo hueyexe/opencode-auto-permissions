@@ -8,6 +8,12 @@ describe("parseDecision", () => {
     ).toEqual({ kind: "allow", reasonCode: "routine_test", reason: "Runs local tests." })
   })
 
+  test("accepts a session-scoped approval decision", () => {
+    expect(
+      parseDecision({ decision: "allow_session", reasonCode: "repeatable_read", reason: "Safe for this session." }),
+    ).toEqual({ kind: "allow_session", reasonCode: "repeatable_read", reason: "Safe for this session." })
+  })
+
   test.each([
     "",
     null,

@@ -15,6 +15,7 @@ export function normalizeAskedEvent(event: unknown): PermissionRequest | null {
       sessionID: data.sessionID,
       action: data.action,
       resources: [...data.resources],
+      always: stringArray(data.always),
       ...(validTool(data.source) ? { source: data.source } : {}),
       protocol: "v2",
     }
@@ -37,6 +38,7 @@ export function normalizeAskedEvent(event: unknown): PermissionRequest | null {
     sessionID: data.sessionID,
     action,
     resources,
+    always: stringArray(data.always),
     ...(tool ? { source: tool } : {}),
     protocol: "stable",
   }
@@ -74,6 +76,7 @@ export async function collectReviewInput(
     request: {
       action: request.action,
       resources: [...request.resources],
+      sessionPatterns: [...request.always],
       ...(request.source?.type === "tool"
         ? { toolInput: findToolInput(context, request.sessionID, request.source.messageID, request.source.callID) }
         : {}),
@@ -150,6 +153,10 @@ function validTool(value: unknown): value is { type: "tool"; messageID: string; 
       typeof value.messageID === "string" &&
       typeof value.callID === "string",
   )
+}
+
+function stringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : []
 }
 
 function userText(message: unknown): string | undefined {

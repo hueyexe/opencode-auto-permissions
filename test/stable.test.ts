@@ -119,7 +119,7 @@ describe("createStableRuntime", () => {
     expect(runtime.context.data.session.message.list("ses_root")).toHaveLength(2)
     await runtime.context.data.session.permission.sync("ses_child")
     expect(runtime.context.data.session.permission.list("ses_child")).toMatchObject([
-      { id: "per_1", action: "bash", resources: ["git status"], protocol: "stable" },
+      { id: "per_1", action: "bash", resources: ["git status"], always: [], protocol: "stable" },
     ])
     runtime.dispose()
   })

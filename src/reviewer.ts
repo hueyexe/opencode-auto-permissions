@@ -145,14 +145,25 @@ async function reviewAndReply(
   const pending = await isRequestPending(context, request)
   if (!pending || parentSignal.aborted) return
 
-  if (decision.kind === "allow") {
+  if (decision.kind === "allow" || decision.kind === "allow_session") {
+    const reply = decision.kind === "allow_session" && eligibleForSessionApproval(config, request, input)
+      ? "always"
+      : "once"
     const result = await client.reply({
       sessionID: request.sessionID,
       requestID: request.id,
-      reply: "once",
+      reply,
       protocol: request.protocol,
     })
-    writeDecision(config, request, startedAt, decision, policyDecision ? "policy" : "model", result)
+    writeDecision(
+      config,
+      request,
+      startedAt,
+      decision,
+      policyDecision ? "policy" : "model",
+      result,
+      reply === "always" ? "session" : "once",
+    )
     return
   }
 
@@ -168,6 +179,35 @@ async function reviewAndReply(
   if (result === "replied") context.resumeAfterDenial?.(request.sessionID, decision.reason)
 }
 
+function eligibleForSessionApproval(
+  config: Config,
+  request: PermissionRequest,
+  input: Awaited<ReturnType<typeof collectReviewInput>>,
+): boolean {
+  if (!config.sessionApprovals || request.always.length === 0) return false
+  if (request.always.some((pattern) => isBroadPattern(pattern))) return false
+  if ([...request.resources, ...request.always].some((value) => isSensitiveTarget(value))) return false
+  if (["read", "glob", "grep", "list", "lsp"].includes(request.action)) return true
+  if (request.action !== "shell" && request.action !== "bash") return false
+  const command = typeof input.request.toolInput === "object" && input.request.toolInput !== null
+    ? Reflect.get(input.request.toolInput, "command")
+    : input.request.resources.join(" && ")
+  if (typeof command !== "string") return false
+  return !isSensitiveTarget(command)
+    && !/\b(?:sudo|rm|rmdir|shred|git\s+(?:push|reset|clean|rebase)|npm\s+publish|pnpm\s+publish|yarn\s+npm\s+publish|deploy|terraform\s+apply|kubectl\s+(?:apply|delete)|curl\b[^\n|]*\|\s*(?:ba|z|k)?sh)\b/i.test(command)
+}
+
+function isBroadPattern(pattern: string): boolean {
+  const value = pattern.trim()
+  return !value || value === "*" || value === "**" || /^[\\/]?(?:tmp|home|Users)[\\/][*?]+$/i.test(value)
+    || /^[*?]/.test(value) || /\*\*/.test(value)
+    || /^(?:git|npm|pnpm|yarn|bun|cargo|go|sudo|rm)\s+[*?]+$/i.test(value)
+}
+
+function isSensitiveTarget(value: string): boolean {
+  return /(?:^|[\\/])(?:\.ssh|\.aws|\.gnupg|Keychains?|credentials?|tokens?)(?:[\\/]|$)|(?:^|[\\/])\.env(?:\.|$)/i.test(value)
+}
+
 function writeDecision(
   config: Config,
   request: PermissionRequest,
@@ -175,6 +215,7 @@ function writeDecision(
   decision: Decision,
   source: "policy" | "model",
   replyResult?: "replied" | "not_found" | "manual",
+  approvalScope?: "once" | "session",
 ): void {
   writeDiagnostic(config.diagnosticsPath, {
     timestamp: new Date().toISOString(),
@@ -191,6 +232,7 @@ function writeDecision(
     reason: decision.reason,
     shadow: config.shadow,
     ...(replyResult ? { replyResult } : {}),
+    ...(approvalScope ? { approvalScope } : {}),
   })
 }
 

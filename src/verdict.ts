@@ -1,6 +1,6 @@
 import type { Decision } from "./types.ts"
 
-const DECISIONS = new Set(["allow", "deny", "ask"])
+const DECISIONS = new Set(["allow", "allow_session", "deny", "ask"])
 const KEYS = ["decision", "reason", "reasonCode"]
 const REASON_CODE = /^[a-z][a-z0-9_]{0,63}$/
 const MAX_REASON_LENGTH = 240

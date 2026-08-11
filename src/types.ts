@@ -10,12 +10,14 @@ export interface PermissionRequest {
   sessionID: string
   action: string
   resources: string[]
+  always: string[]
   source?: { type: "tool"; messageID: string; callID: string }
   protocol: PermissionProtocol
 }
 
 export type Decision =
   | { kind: "allow"; reasonCode: string; reason: string }
+  | { kind: "allow_session"; reasonCode: string; reason: string }
   | { kind: "deny"; reasonCode: string; reason: string }
   | { kind: "ask"; reasonCode: string; reason: string }
 
@@ -23,6 +25,7 @@ export interface ReviewInput {
   request: {
     action: string
     resources: string[]
+    sessionPatterns: string[]
     toolInput?: unknown
   }
   context: {
@@ -78,7 +81,7 @@ export interface ReviewerClient {
   reply(input: {
     sessionID: string
     requestID: string
-    reply: "once" | "reject"
+    reply: "once" | "always" | "reject"
     message?: string
     protocol: PermissionProtocol
   }): Promise<"replied" | "not_found">

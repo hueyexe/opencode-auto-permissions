@@ -102,6 +102,7 @@ function request(command: string, protocol: PermissionRequest["protocol"] = "v2"
     sessionID: "ses_root",
     action: "shell",
     resources: [command],
+    always: [command],
     source: { type: "tool", messageID: "msg_assistant", callID: "call_1" },
     protocol,
   }
@@ -113,6 +114,7 @@ function toolRequest(action: string, resource: string): PermissionRequest {
     sessionID: "ses_root",
     action,
     resources: [resource],
+    always: [resource],
     source: { type: "tool", messageID: "msg_assistant", callID: "call_1" },
     protocol: "v2",
   }
@@ -150,6 +152,91 @@ describe("installReviewer", () => {
     expect(app.replies).toEqual([
       { sessionID: "ses_root", requestID: "per_1", reply: "once", protocol: "v2" },
     ])
+    dispose()
+  })
+
+  test("allows a narrow repeatable action for the remainder of the session", async () => {
+    const app = harness()
+    app.client.generate = async () => ({
+      decision: "allow_session",
+      reasonCode: "repeatable_fetch",
+      reason: "Fetching this remote is a repeatable low-risk operation.",
+    })
+    const pending = request("git fetch origin")
+    pending.always = ["git fetch origin*"]
+    app.requests.push(pending)
+    const dispose = installReviewer(app.context, { client: app.client })
+
+    app.emit("permission.v2.asked", app.requests[0])
+    await settle()
+
+    expect(app.replies).toEqual([
+      { sessionID: "ses_root", requestID: "per_1", reply: "always", protocol: "v2" },
+    ])
+    dispose()
+  })
+
+  test.each([
+    { command: "git push origin feature", always: ["git push origin feature"] },
+    { command: "git fetch origin", always: ["*"] },
+    { command: "git fetch origin", always: ["git *"] },
+  ])("downgrades ineligible session approval for $command", async ({ command, always }) => {
+    const app = harness()
+    app.client.generate = async () => ({
+      decision: "allow_session",
+      reasonCode: "repeatable_action",
+      reason: "Allow matching actions for this session.",
+    })
+    const pending = request(command)
+    pending.always = [...always]
+    app.requests.push(pending)
+    const dispose = installReviewer(app.context, { client: app.client })
+
+    app.emit("permission.v2.asked", app.requests[0])
+    await settle()
+
+    expect(app.replies[0]?.reply).toBe("once")
+    dispose()
+  })
+
+  test("can disable session approvals", async () => {
+    const app = harness({ model: "openai/gpt-5.6-luna", sessionApprovals: false })
+    app.client.generate = async () => ({
+      decision: "allow_session",
+      reasonCode: "repeatable_fetch",
+      reason: "Fetching this remote is a repeatable low-risk operation.",
+    })
+    const pending = request("git fetch origin")
+    pending.always = ["git fetch origin*"]
+    app.requests.push(pending)
+    const dispose = installReviewer(app.context, { client: app.client })
+
+    app.emit("permission.v2.asked", app.requests[0])
+    await settle()
+
+    expect(app.replies[0]?.reply).toBe("once")
+    dispose()
+  })
+
+  test.each([
+    { action: "read", resource: "/home/user/.ssh/id_ed25519" },
+    { action: "shell", resource: "cat /repo/.env" },
+  ])("keeps credential-sensitive $action approval one-time", async ({ action, resource }) => {
+    const app = harness()
+    app.client.generate = async () => ({
+      decision: "allow_session",
+      reasonCode: "repeatable_access",
+      reason: "Allow matching access for this session.",
+    })
+    const pending = action === "shell" ? request(resource) : toolRequest(action, resource)
+    pending.always = [resource]
+    app.requests.push(pending)
+    const dispose = installReviewer(app.context, { client: app.client })
+
+    app.emit("permission.v2.asked", app.requests[0])
+    await settle()
+
+    expect(app.replies[0]?.reply).toBe("once")
     dispose()
   })
 

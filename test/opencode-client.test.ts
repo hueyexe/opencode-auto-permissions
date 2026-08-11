@@ -175,7 +175,7 @@ describe("OpenCodeClientAdapter", () => {
     expect(prompts).toHaveLength(2)
     expect(prompts[1]).toMatchObject({ format: { type: "text" } })
     expect(prompts[1].parts[0].text).toContain('exactly these three keys')
-    expect(prompts[1].parts[0].text).toContain('"decision": one of "allow", "deny", or "ask"')
+    expect(prompts[1].parts[0].text).toContain('"decision": one of "allow", "allow_session", "deny", or "ask"')
   })
 
   test("uses the generated stable abort envelope when review is cancelled", async () => {
@@ -253,6 +253,23 @@ describe("OpenCodeClientAdapter", () => {
     expect(calls).toEqual(["v2"])
   })
 
+  test("sends session approval through the V2 endpoint", async () => {
+    const replies: unknown[] = []
+    const client = new OpenCodeClientAdapter({
+      v2: {
+        session: {
+          permission: {
+            reply: async (input: unknown) => replies.push(input),
+          },
+        },
+      },
+    })
+
+    await client.reply({ sessionID: "ses_1", requestID: "per_1", reply: "always", protocol: "v2" })
+
+    expect(replies).toEqual([{ sessionID: "ses_1", requestID: "per_1", reply: "always", protocol: "v2" }])
+  })
+
   test("uses the direct V2 TUI session permission endpoint", async () => {
     const calls: string[] = []
     const client = new OpenCodeClientAdapter({
@@ -306,6 +323,17 @@ describe("OpenCodeClientAdapter", () => {
     await client.reply({ sessionID: "ses_1", requestID: "per_1", reply: "once", protocol: "stable" })
 
     expect(calls).toEqual(["stable"])
+  })
+
+  test("sends session approval through the generated stable endpoint", async () => {
+    const replies: unknown[] = []
+    const client = new OpenCodeClientAdapter({
+      postSessionIdPermissionsPermissionId: async (input: unknown) => replies.push(input),
+    })
+
+    await client.reply({ sessionID: "ses_1", requestID: "per_1", reply: "always", protocol: "stable" })
+
+    expect(replies).toEqual([{ path: { id: "ses_1", permissionID: "per_1" }, body: { response: "always" } }])
   })
 
   test("uses the generated stable permission endpoint", async () => {
