@@ -34,6 +34,7 @@ describe("server plugin", () => {
   test("prioritizes exact tool input and the latest human request", () => {
     expect(REVIEWER_SYSTEM_PROMPT).toContain("Judge the actual operation from toolInput")
     expect(REVIEWER_SYSTEM_PROMPT).toContain("Give the latest human request the greatest weight")
+    expect(REVIEWER_SYSTEM_PROMPT).toContain("Treat direct continuation phrases")
     expect(REVIEWER_SYSTEM_PROMPT).toContain("do not treat the boundary glob as the intended scope")
   })
 

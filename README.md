@@ -109,7 +109,7 @@ The plugin tuple accepts these options:
 | `variant` | Provider default | Optional reviewer-only model variant. Use `"low"` when supported for faster decisions. |
 | `sessionApprovals` | `true` | Allow guarded, pattern-specific approvals for the current OpenCode session. Set `false` for one-time approvals only. |
 | `timeoutMs` | `8000` | Review timeout from 100 to 30,000 milliseconds. |
-| `userMessageCount` | `4` | Recent user messages included in review context, from 1 to 20. |
+| `userMessageCount` | `8` | Recent user messages included in review context, from 1 to 20. |
 | `shadow` | `false` | Evaluate and record decisions without replying to permission requests. |
 | `runtime` | `"auto"` | Diagnostics override: `"auto"`, `"stable"`, or `"v2"`. Leave this on `"auto"` in normal use. |
 | `debug` | `false` | Write the latest 100 privacy-minimized outcomes to a JSONL file. Use `true` for the default path or provide a file path. |

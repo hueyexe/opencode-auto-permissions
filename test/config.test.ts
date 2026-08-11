@@ -7,7 +7,7 @@ describe("parseConfig", () => {
       model: { providerID: "openai", id: "gpt-5.6-luna" },
       modelLabel: "openai/gpt-5.6-luna",
       timeoutMs: 8_000,
-      userMessageCount: 4,
+      userMessageCount: 8,
       shadow: false,
       sessionApprovals: true,
       runtime: "auto",

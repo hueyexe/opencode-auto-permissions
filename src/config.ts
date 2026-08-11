@@ -2,7 +2,7 @@ import type { ReviewModel } from "./types.ts"
 import { defaultDiagnosticsPath } from "./diagnostics.ts"
 
 const DEFAULT_TIMEOUT_MS = 8_000
-const DEFAULT_USER_MESSAGE_COUNT = 4
+const DEFAULT_USER_MESSAGE_COUNT = 8
 
 export interface Config {
   model: ReviewModel
