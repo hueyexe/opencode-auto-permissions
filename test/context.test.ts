@@ -46,6 +46,17 @@ describe("review context isolation", () => {
                   { type: "tool", callID: "call_1", state: { output: "TOOL OUTPUT" } },
                 ],
               },
+              {
+                info: { id: "msg_plugin", role: "user" },
+                parts: [{
+                  type: "text",
+                  text: "[Auto Permissions] The requested action was blocked: Complete reviews first.",
+                }],
+              },
+              {
+                info: { id: "msg_approval", role: "user" },
+                parts: [{ type: "text", text: "The reviews are complete. I approve the push." }],
+              },
             ],
             get: () => undefined,
             sync: async () => {},
@@ -67,12 +78,16 @@ describe("review context isolation", () => {
     const input = await collectReviewInput(context, request, 4)
     const prompt = buildReviewPrompt(input)
 
-    expect(input.context.userMessages).toEqual(["Real human instruction"])
+    expect(input.context.userMessages).toEqual([
+      "Real human instruction",
+      "The reviews are complete. I approve the push.",
+    ])
     expect(input.request.sessionPatterns).toEqual([])
     expect(prompt).toContain("Real human instruction")
     expect(prompt).not.toContain("DEFAULT SYSTEM PROMPT")
     expect(prompt).not.toContain("IGNORED PLUGIN INSTRUCTION")
     expect(prompt).not.toContain("ASSISTANT RATIONALE")
     expect(prompt).not.toContain("TOOL OUTPUT")
+    expect(prompt).not.toContain("Complete reviews first")
   })
 })

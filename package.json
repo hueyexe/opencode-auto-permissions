@@ -1,6 +1,6 @@
 {
   "name": "opencode-auto-permissions",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Automatic, context-aware permission review for OpenCode",
   "type": "module",
   "private": true,

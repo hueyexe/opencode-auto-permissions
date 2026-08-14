@@ -35,6 +35,7 @@ Decision rules:
 - External-directory access is a boundary check, not proof of sensitive access. ALLOW ordinary project, tool, cache, log, state, temporary, and worktree directories when they support the task. The possibility that a broad directory might contain sensitive data is not a concrete harm; require a specifically sensitive target or operation.
 - Permission resources may be broad boundary globs such as /tmp/* even when the tool input targets one precise path. Judge the actual operation from toolInput when available; do not treat the boundary glob as the intended scope.
 - Give the latest human request the greatest weight. Do not assume an action retries an earlier blocked request unless the current target and operation actually match it.
+- Treat later explicit human authorization as superseding an earlier conditional gate when the human says the prerequisite is satisfied or directly approves the action.
 - Treat direct continuation phrases such as "proceed", "keep going", "continue", and "go on" as authorization for the immediately pending reasonable next step in the current task. Do not require the human to repeat an earlier explicit instruction when the action remains aligned with that task.
 - DENY only when the action would clearly cause serious unintended harm, expose secrets, weaken safeguards without authorization, or contradict an explicit human boundary. In the reason, briefly identify a safer alternative the agent can try when one exists.
 - Always decide ALLOW, ALLOW_SESSION, or DENY. Never defer to the human. If essential authorization is absent and approval cannot be justified, DENY with a concise explanation and a safer alternative the coding agent can try.
@@ -53,6 +54,7 @@ var REVIEWER_PERMISSIONS = [
   { permission: "StructuredOutput", pattern: "*", action: "allow" }
 ];
 var REVIEWER_DIRECTORY = join(tmpdir(), "opencode-auto-permissions", "reviewer");
+var REVIEWER_SESSION_TITLE = "Auto Permissions review";
 
 class OpenCodeClientAdapter {
   client;
@@ -76,6 +78,7 @@ class OpenCodeClientAdapter {
     if (requests.length === 0)
       throw new Error("OpenCode reviewer prewarm APIs are unavailable");
     await Promise.all(requests);
+    await this.deleteStaleReviewerSessions();
   }
   async generate(input) {
     const stable = typeof this.client.postSessionIdPermissionsPermissionId === "function";
@@ -100,10 +103,10 @@ class OpenCodeClientAdapter {
         throw abortError(input.signal.reason);
       const createInput = stable ? {
         query: location,
-        body: { title: "Auto Permissions review" }
+        body: { title: REVIEWER_SESSION_TITLE }
       } : {
         ...location,
-        title: "Auto Permissions review",
+        title: REVIEWER_SESSION_TITLE,
         agent: REVIEWER_AGENT_ID,
         model: input.model,
         metadata: { source: "opencode-auto-permissions" },
@@ -164,6 +167,22 @@ Example: {"decision":"allow","reasonCode":"authorized_action","reason":"The acti
         });
       }
     }
+  }
+  async deleteStaleReviewerSessions() {
+    const stable = typeof this.client.postSessionIdPermissionsPermissionId === "function";
+    const session = stable ? this.client.session : this.client.v2?.session ?? this.client.session;
+    if (!session || typeof session.list !== "function" || typeof session.delete !== "function")
+      return;
+    const location = { directory: REVIEWER_DIRECTORY };
+    const listInput = stable ? { query: location } : location;
+    const result = unwrapData(await session.list(listInput));
+    const sessions = Array.isArray(result) ? result : isRecord(result) && Array.isArray(result.data) ? result.data : [];
+    await Promise.all(sessions.filter((value) => isRecord(value) && value.title === REVIEWER_SESSION_TITLE && typeof value.id === "string").map((value) => {
+      const deleteInput = stable ? { path: { id: value.id }, query: location } : { sessionID: value.id, ...location };
+      return Promise.resolve(session.delete(deleteInput)).catch(() => {
+        return;
+      });
+    }));
   }
   async reply(input) {
     try {
@@ -409,6 +428,7 @@ function boundedInteger(value, fallback, minimum, maximum, name) {
 
 // src/context.ts
 var MAX_MESSAGE_CHARS = 4000;
+var AUTO_PERMISSIONS_MESSAGE_PREFIX = "[Auto Permissions] The requested action was blocked:";
 function normalizeAskedEvent(event) {
   if (!isRecord2(event))
     return null;
@@ -522,13 +542,17 @@ function stringArray(value) {
 function userText(message) {
   if (!isRecord2(message))
     return;
-  if (message.type === "user" && typeof message.text === "string")
-    return message.text;
+  if (message.type === "user" && typeof message.text === "string") {
+    return isPluginContinuation(message.text) ? undefined : message.text;
+  }
   if (!isRecord2(message.info) || message.info.role !== "user" || !Array.isArray(message.parts))
     return;
   const text = message.parts.filter((part) => isRecord2(part) && part.type === "text" && typeof part.text === "string" && part.synthetic !== true && part.ignored !== true).map((part) => part.text).join(`
 `);
-  return text || undefined;
+  return text && !isPluginContinuation(text) ? text : undefined;
+}
+function isPluginContinuation(text) {
+  return text.trimStart().startsWith(AUTO_PERMISSIONS_MESSAGE_PREFIX);
 }
 
 // src/policy.ts

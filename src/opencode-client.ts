@@ -9,6 +9,7 @@ const REVIEWER_PERMISSIONS = [
   { permission: "StructuredOutput", pattern: "*", action: "allow" },
 ] as const
 const REVIEWER_DIRECTORY = join(tmpdir(), "opencode-auto-permissions", "reviewer")
+const REVIEWER_SESSION_TITLE = "Auto Permissions review"
 
 export class OpenCodeClientAdapter implements ReviewerClient {
   constructor(private readonly client: any) {}
@@ -27,6 +28,7 @@ export class OpenCodeClientAdapter implements ReviewerClient {
     }
     if (requests.length === 0) throw new Error("OpenCode reviewer prewarm APIs are unavailable")
     await Promise.all(requests)
+    await this.deleteStaleReviewerSessions()
   }
 
   async generate(input: {
@@ -59,11 +61,11 @@ export class OpenCodeClientAdapter implements ReviewerClient {
       const createInput = stable
         ? {
             query: location,
-            body: { title: "Auto Permissions review" },
+            body: { title: REVIEWER_SESSION_TITLE },
           }
         : {
             ...location,
-            title: "Auto Permissions review",
+            title: REVIEWER_SESSION_TITLE,
             agent: REVIEWER_AGENT_ID,
             model: input.model,
             metadata: { source: "opencode-auto-permissions" },
@@ -121,6 +123,29 @@ export class OpenCodeClientAdapter implements ReviewerClient {
         await Promise.resolve(session.delete(deleteInput)).catch(() => undefined)
       }
     }
+  }
+
+  private async deleteStaleReviewerSessions(): Promise<void> {
+    const stable = typeof this.client.postSessionIdPermissionsPermissionId === "function"
+    const session = stable ? this.client.session : (this.client.v2?.session ?? this.client.session)
+    if (!session || typeof session.list !== "function" || typeof session.delete !== "function") return
+
+    const location = { directory: REVIEWER_DIRECTORY }
+    const listInput = stable ? { query: location } : location
+    const result = unwrapData(await session.list(listInput))
+    const sessions = Array.isArray(result)
+      ? result
+      : isRecord(result) && Array.isArray(result.data)
+        ? result.data
+        : []
+    await Promise.all(sessions
+      .filter((value) => isRecord(value) && value.title === REVIEWER_SESSION_TITLE && typeof value.id === "string")
+      .map((value) => {
+        const deleteInput = stable
+          ? { path: { id: value.id }, query: location }
+          : { sessionID: value.id, ...location }
+        return Promise.resolve(session.delete(deleteInput)).catch(() => undefined)
+      }))
   }
 
   async reply(input: {

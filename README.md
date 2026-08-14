@@ -74,8 +74,11 @@ For each supported permission request, Auto Permissions combines deterministic s
 - Reviewer failures and timeouts fail closed: the request is rejected automatically and the main agent receives guidance to continue with a narrower or lower-risk step.
 - Reviewer sessions are hidden, have no tools, and deny all permissions.
 - Only a small, recent window of relevant user context is sent for review.
+- Plugin-authored denial continuations are excluded from that context so an earlier verdict cannot become a self-reinforcing human instruction.
 
 The reviewer never receives authority to execute the requested action. It always resolves the request by approving once, approving narrow matching requests for the current session, or rejecting with an actionable reason. Session approvals are held in memory by OpenCode and do not persist to later sessions.
+
+Reviewer sessions are standalone, deleted after each decision or failure, and swept on plugin startup if a prior process exited before cleanup. The sweep targets only sessions titled exactly `Auto Permissions review`; it never prunes user sessions or project conversation history.
 
 Auto Permissions never asks the user to resolve a permission prompt. When the reviewer cannot safely approve, it denies and tells the coding agent why, what safer alternative to try, and to continue autonomously where possible.
 

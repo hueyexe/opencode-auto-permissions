@@ -1,6 +1,7 @@
 import type { PermissionRequest, ReviewInput, RuntimeContext } from "./types.ts"
 
 const MAX_MESSAGE_CHARS = 4_000
+export const AUTO_PERMISSIONS_MESSAGE_PREFIX = "[Auto Permissions] The requested action was blocked:"
 
 export function normalizeAskedEvent(event: unknown): PermissionRequest | null {
   if (!isRecord(event)) return null
@@ -161,7 +162,9 @@ function stringArray(value: unknown): string[] {
 
 function userText(message: unknown): string | undefined {
   if (!isRecord(message)) return undefined
-  if (message.type === "user" && typeof message.text === "string") return message.text
+  if (message.type === "user" && typeof message.text === "string") {
+    return isPluginContinuation(message.text) ? undefined : message.text
+  }
   if (!isRecord(message.info) || message.info.role !== "user" || !Array.isArray(message.parts)) return undefined
   const text = message.parts
     .filter(
@@ -174,5 +177,9 @@ function userText(message: unknown): string | undefined {
     )
     .map((part) => part.text)
     .join("\n")
-  return text || undefined
+  return text && !isPluginContinuation(text) ? text : undefined
+}
+
+function isPluginContinuation(text: string): boolean {
+  return text.trimStart().startsWith(AUTO_PERMISSIONS_MESSAGE_PREFIX)
 }

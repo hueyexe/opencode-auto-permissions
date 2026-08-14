@@ -1,4 +1,4 @@
-import { normalizeAskedEvent, normalizeRepliedEvent } from "./context.ts"
+import { AUTO_PERMISSIONS_MESSAGE_PREFIX, normalizeAskedEvent, normalizeRepliedEvent } from "./context.ts"
 import type { PermissionRequest, RuntimeContext } from "./types.ts"
 
 type Handler = (event: unknown) => void
@@ -101,7 +101,7 @@ export function createStableRuntime(
             body: {
               parts: [{
                 type: "text",
-                text: `[Auto Permissions] The requested action was blocked: ${reason} Do not retry the exact blocked action. Continue the task using a safer alternative when possible; ask the user only if no useful safe path remains.`,
+                text: `${AUTO_PERMISSIONS_MESSAGE_PREFIX} ${reason} Do not retry the exact blocked action. Continue the task using a safer alternative when possible; ask the user only if no useful safe path remains.`,
               }],
             },
           })
