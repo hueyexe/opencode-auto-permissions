@@ -1,0 +1,61 @@
+{
+  "name": "opencode-auto-permissions",
+  "version": "0.2.3",
+  "description": "Automatic, context-aware permission review for OpenCode",
+  "type": "module",
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hueyexe/opencode-auto-permissions.git"
+  },
+  "homepage": "https://github.com/hueyexe/opencode-auto-permissions#readme",
+  "bugs": {
+    "url": "https://github.com/hueyexe/opencode-auto-permissions/issues"
+  },
+  "main": "./dist/server.js",
+  "exports": {
+    ".": "./dist/server.js",
+    "./server": "./dist/server.js",
+    "./tui": "./dist/tui.js"
+  },
+  "files": [
+    "dist",
+    "LICENSE",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "rm -rf dist && bun build src/server.ts src/tui.ts --outdir dist --target bun --format esm",
+    "check": "tsc --noEmit",
+    "test": "bun test",
+    "test:coverage": "bun test --coverage",
+    "test:stable": "bun run scripts/test-runtime.ts stable",
+    "test:v2": "bun run scripts/test-runtime.ts v2",
+    "verify": "bun run check && bun run test && bun run build && bun run test:package",
+    "test:package": "bun test test/package.test.ts"
+  },
+  "keywords": [
+    "opencode",
+    "opencode-plugin",
+    "permissions",
+    "auto-approval",
+    "safety",
+    "llm"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "devDependencies": {
+    "@opencode-ai/plugin": "0.0.0-beta-202608040144",
+    "@opencode-ai/sdk": "0.0.0-beta-202608040144",
+    "@opentui/core": "0.4.5",
+    "@opentui/keymap": "0.4.5",
+    "@opentui/solid": "0.4.5",
+    "@types/bun": "1.3.14",
+    "jsonc-parser": "3.3.1",
+    "opencode-ai": "0.0.0-beta-202608040144",
+    "typescript": "5.9.3"
+  }
+}
