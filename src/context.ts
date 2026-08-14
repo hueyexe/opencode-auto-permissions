@@ -1,4 +1,4 @@
-import type { PermissionRequest, ReviewInput, RuntimeContext } from "./types.ts"
+import type { PermissionRequest, ReviewInput, ReviewModel, RuntimeContext } from "./types.ts"
 
 const MAX_MESSAGE_CHARS = 4_000
 export const AUTO_PERMISSIONS_MESSAGE_PREFIX = "[Auto Permissions] The requested action was blocked:"
@@ -72,6 +72,7 @@ export async function collectReviewInput(
     })
     .slice(-userMessageCount)
   const currentDirectory = directory(context)
+  const model = latestUserModel(messages)
 
   return {
     request: {
@@ -86,8 +87,24 @@ export async function collectReviewInput(
       rootSessionID,
       ...(currentDirectory ? { directory: currentDirectory } : {}),
       userMessages,
+      ...(model ? { model } : {}),
     },
   }
+}
+
+function latestUserModel(messages: unknown[]): ReviewModel | undefined {
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const message = messages[index]
+    if (!isRecord(message)) continue
+    const info = isRecord(message.info) ? message.info : message
+    if (info.role !== "user" || !isRecord(info.model)) continue
+    const providerID = info.model.providerID
+    const id = info.model.modelID ?? info.model.id
+    if (typeof providerID !== "string" || typeof id !== "string") continue
+    const variant = typeof info.model.variant === "string" ? info.model.variant : undefined
+    return { providerID, id, ...(variant ? { variant } : {}) }
+  }
+  return undefined
 }
 
 export async function isRequestPending(context: RuntimeContext, request: PermissionRequest): Promise<boolean> {

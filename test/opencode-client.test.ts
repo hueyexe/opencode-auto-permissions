@@ -16,7 +16,7 @@ describe("OpenCodeClientAdapter", () => {
     expect(calls).toEqual(["agents", "skills"])
   })
 
-  test("deletes stale standalone reviewer sessions during prewarm", async () => {
+  test("does not delete reviewer sessions owned by another OpenCode process", async () => {
     const deleted: unknown[] = []
     const client = new OpenCodeClientAdapter({
       app: {
@@ -40,10 +40,7 @@ describe("OpenCodeClientAdapter", () => {
 
     await client.prewarm()
 
-    expect(deleted).toEqual([{
-      sessionID: "ses_review",
-      directory: expect.stringContaining("opencode-auto-permissions"),
-    }])
+    expect(deleted).toEqual([])
   })
 
   test("uses an isolated deny-all reviewer session and deletes it", async () => {

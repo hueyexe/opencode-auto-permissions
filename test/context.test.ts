@@ -32,7 +32,11 @@ describe("review context isolation", () => {
           message: {
             list: () => [
               {
-                info: { id: "msg_user", role: "user" },
+                info: {
+                  id: "msg_user",
+                  role: "user",
+                  model: { providerID: "openai", modelID: "gpt-5.6-luna", variant: "low" },
+                },
                 parts: [
                   { type: "text", text: "DEFAULT SYSTEM PROMPT", synthetic: true },
                   { type: "text", text: "IGNORED PLUGIN INSTRUCTION", ignored: true },
@@ -82,6 +86,7 @@ describe("review context isolation", () => {
       "Real human instruction",
       "The reviews are complete. I approve the push.",
     ])
+    expect(input.context.model).toEqual({ providerID: "openai", id: "gpt-5.6-luna", variant: "low" })
     expect(input.request.sessionPatterns).toEqual([])
     expect(prompt).toContain("Real human instruction")
     expect(prompt).not.toContain("DEFAULT SYSTEM PROMPT")

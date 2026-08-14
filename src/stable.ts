@@ -95,10 +95,12 @@ export function createStableRuntime(
       void waitForIdle(client, sessionID, directory, controller.signal)
         .then((idle) => {
           if (!idle || controller.signal.aborted) return
+          const routing = latestUserRouting(messages.get(sessionID) ?? [])
           return client.session.promptAsync({
             path: { id: sessionID },
             query: { directory },
             body: {
+              ...routing,
               parts: [{
                 type: "text",
                 text: `${AUTO_PERMISSIONS_MESSAGE_PREFIX} ${reason} Do not retry the exact blocked action. Continue the task using a safer alternative when possible; ask the user only if no useful safe path remains.`,
@@ -140,6 +142,33 @@ export function createStableRuntime(
       resumeControllers.clear()
     },
   }
+}
+
+function latestUserRouting(messages: unknown[]): {
+  agent?: string
+  model?: { providerID: string; modelID: string }
+  variant?: string
+} {
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const message = messages[index]
+    if (!isRecord(message)) continue
+    const info = isRecord(message.info) ? message.info : message
+    if (info.role !== "user") continue
+    const agent = typeof info.agent === "string" ? info.agent : undefined
+    const modelValue = isRecord(info.model) ? info.model : undefined
+    const providerID = modelValue?.providerID
+    const modelID = modelValue?.modelID ?? modelValue?.id
+    const model = typeof providerID === "string" && typeof modelID === "string"
+      ? { providerID, modelID }
+      : undefined
+    const variant = typeof modelValue?.variant === "string" ? modelValue.variant : undefined
+    return {
+      ...(agent ? { agent } : {}),
+      ...(model ? { model } : {}),
+      ...(variant ? { variant } : {}),
+    }
+  }
+  return {}
 }
 
 async function waitForIdle(client: any, sessionID: string, directory: string, signal: AbortSignal): Promise<boolean> {

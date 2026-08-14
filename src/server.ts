@@ -11,7 +11,7 @@ const v2Plugin = {
     const config = parseConfig(context.options)
     await context.agent.transform((draft) => {
       draft.update(REVIEWER_AGENT_ID, (agent) => {
-        agent.model = config.model
+        if (config.model) agent.model = config.model
         agent.system = REVIEWER_SYSTEM_PROMPT
         agent.description = "Hidden, no-tool permission reviewer used by OpenCode Auto Permissions."
         agent.mode = "subagent"
@@ -45,8 +45,8 @@ const legacyPlugin: Plugin = async (input, options = {}) => {
     async config(value: Config) {
       value.agent ??= {}
       const reviewer = {
-        model: `${config.model.providerID}/${config.model.id}`,
-        ...(config.model.variant ? { variant: config.model.variant } : {}),
+        ...(config.model ? { model: `${config.model.providerID}/${config.model.id}` } : {}),
+        ...(config.model?.variant ? { variant: config.model.variant } : {}),
         prompt: REVIEWER_SYSTEM_PROMPT,
         description: "Hidden, no-tool permission reviewer used by OpenCode Auto Permissions.",
         mode: "subagent",

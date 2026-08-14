@@ -6,7 +6,8 @@ describe("parseConfig", () => {
     expect(parseConfig({ model: "openai/gpt-5.6-luna" })).toEqual({
       model: { providerID: "openai", id: "gpt-5.6-luna" },
       modelLabel: "openai/gpt-5.6-luna",
-      timeoutMs: 8_000,
+      variant: undefined,
+      timeoutMs: 30_000,
       userMessageCount: 8,
       shadow: false,
       sessionApprovals: true,
@@ -31,7 +32,11 @@ describe("parseConfig", () => {
     expect(() => parseConfig({ model: "a/b", variant: "" })).toThrow(/variant/)
   })
 
-  test.each([{}, { model: "gpt-5.6-luna" }, { model: "/gpt-5.6-luna" }, { model: "provider/" }])(
+  test("inherits the requesting session model by default", () => {
+    expect(parseConfig({})).toMatchObject({ model: undefined, modelLabel: undefined, variant: undefined })
+  })
+
+  test.each([{ model: "" }, { model: "gpt-5.6-luna" }, { model: "/gpt-5.6-luna" }, { model: "provider/" }])(
     "rejects invalid model option %#",
     (options) => expect(() => parseConfig(options)).toThrow(),
   )

@@ -31,6 +31,7 @@ export interface ReviewInput {
     rootSessionID: string
     directory?: string
     userMessages: string[]
+    model?: ReviewModel
   }
 }
 

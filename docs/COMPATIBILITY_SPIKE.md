@@ -5,7 +5,7 @@ Verified on 4 August 2026 against:
 - OpenCode `0.0.0-beta-202608040144`
 - `@opencode-ai/plugin@0.0.0-beta-202608040144`
 - `@opencode-ai/sdk@0.0.0-beta-202608040144`
-- Reviewer model `kiro-openai/gpt-5.6-luna`
+- OpenAI-compatible GPT-5.6 Luna reviewer model
 
 Stable compatibility was additionally verified on 5 August 2026 against
 OpenCode `1.18.12`.

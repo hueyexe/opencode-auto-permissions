@@ -65,7 +65,7 @@ describe("server plugin", () => {
       {
         sessionID: "ses_review",
         agent: "auto-permissions-reviewer",
-        model: { providerID: "kiro-openai", modelID: "gpt-5.6-luna" },
+        model: { providerID: "openai", modelID: "gpt-5.6-luna" },
       },
       {} as never,
     )

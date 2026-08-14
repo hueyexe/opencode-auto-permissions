@@ -27,7 +27,12 @@ function client() {
       messages: async ({ path }: { path: { id: string } }) => ({
         data: [
           {
-            info: { id: "msg_user", role: "user" },
+            info: {
+              id: "msg_user",
+              role: "user",
+              agent: "build",
+              model: { providerID: "openai", modelID: "gpt-5.6-luna", variant: "max" },
+            },
             parts: [{ type: "text", text: "Inspect the repository." }],
           },
           {
@@ -75,6 +80,7 @@ describe("createStableRuntime", () => {
   test("resumes the session with safe continuation guidance after a denial", async () => {
     const injected = client()
     const runtime = createStableRuntime(injected, { model: "openai/gpt-5.6-luna" }, "/repo")
+    await runtime.context.data.session.message.sync("ses_child")
 
     runtime.context.resumeAfterDenial?.("ses_child", "The user explicitly prohibited this action.")
     await new Promise((resolve) => setTimeout(resolve, 150))
@@ -84,6 +90,9 @@ describe("createStableRuntime", () => {
         path: { id: "ses_child" },
         query: { directory: "/repo" },
         body: {
+          agent: "build",
+          model: { providerID: "openai", modelID: "gpt-5.6-luna" },
+          variant: "max",
           parts: [{
             type: "text",
             text: expect.stringContaining("Continue the task using a safer alternative"),

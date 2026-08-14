@@ -289,19 +289,30 @@ async function modelDecision(
   input: Awaited<ReturnType<typeof collectReviewInput>>,
   parentSignal: AbortSignal,
 ): Promise<Decision> {
+  const inheritedModel = input.context.model
+  const model = config.model ?? (inheritedModel
+    ? { ...inheritedModel, ...(config.variant ? { variant: config.variant } : {}) }
+    : undefined)
+  if (!model) throw new Error("Auto Permissions could not determine the requesting session model")
   const timeout = new AbortController()
   const timer = setTimeout(() => timeout.abort("review timed out"), config.timeoutMs)
   const abort = () => timeout.abort(parentSignal.reason)
   parentSignal.addEventListener("abort", abort, { once: true })
 
   try {
-    const structured = await client.generate({
-      prompt: buildReviewPrompt(input),
-      model: config.model,
-      parentSessionID: input.context.rootSessionID,
-      ...(input.context.directory ? { location: { directory: input.context.directory } } : {}),
-      signal: timeout.signal,
-    })
+    let structured: unknown
+    try {
+      structured = await client.generate({
+        prompt: buildReviewPrompt(input),
+        model,
+        parentSessionID: input.context.rootSessionID,
+        ...(input.context.directory ? { location: { directory: input.context.directory } } : {}),
+        signal: timeout.signal,
+      })
+    } catch (error) {
+      if (timeout.signal.aborted && !parentSignal.aborted) throw new Error("Permission review timed out")
+      throw error
+    }
     const decision = parseDecision(structured)
     if (!decision) throw new Error("Reviewer returned an invalid decision")
     return decision

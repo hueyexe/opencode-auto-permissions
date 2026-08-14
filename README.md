@@ -1,7 +1,8 @@
 # OpenCode Auto Permissions
 
 [![release](https://img.shields.io/github/v/release/hueyexe/opencode-auto-permissions.svg)](https://github.com/hueyexe/opencode-auto-permissions/releases)
-[![tests](https://img.shields.io/badge/tests-80%20passing-brightgreen.svg)](./test)
+[![npm](https://img.shields.io/npm/v/opencode-auto-permissions.svg)](https://www.npmjs.com/package/opencode-auto-permissions)
+[![tests](https://img.shields.io/badge/tests-87%20passing-brightgreen.svg)](./test)
 [![TypeScript](https://img.shields.io/badge/TypeScript-strict-blue.svg)](./tsconfig.json)
 [![OpenCode](https://img.shields.io/badge/OpenCode-stable%20%2B%20V2-blue.svg)](./docs/COMPATIBILITY_SPIKE.md)
 [![license](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
@@ -10,20 +11,29 @@ Automatic, context-aware permission review for OpenCode. Let routine work run no
 
 The plugin supports stable and V2 OpenCode permission protocols automatically. It never grants permanent `always` permission.
 
-## Quick Start
+## Install
 
-The recommended setup is not to set every permission to `ask`. Allow routine work in OpenCode, then use `ask` for operations where context matters. Only `ask` requests reach Auto Permissions.
+Install the published npm package globally with OpenCode's built-in plugin installer:
 
-Add the tagged Git package, reviewer model, and risk-based permission rules to your global OpenCode config at `~/.config/opencode/opencode.json`:
+```bash
+opencode plugin -g opencode-auto-permissions
+```
+
+That is the complete plugin installation. You do not need to clone this repository, install Bun, run `npm install`, choose a reviewer model, or edit plugin entries manually.
+
+OpenCode downloads the package, detects its separate server and TUI targets, and adds `opencode-auto-permissions` to:
+
+- `~/.config/opencode/opencode.json` for the server integration.
+- `~/.config/opencode/tui.json` for the V2 TUI integration.
+
+Quit and restart OpenCode after installation because configuration is loaded at startup. Auto Permissions automatically uses the model and variant selected by the session that requested the action. It also detects whether the server or TUI integration owns permission review, so only one reviewer handles each request.
+
+## Configure Permissions
+
+The recommended setup is not to set every permission to `ask`. Allow routine work in OpenCode, then use `ask` for operations where context matters. Only `ask` requests reach Auto Permissions. For example, add risk-based rules to `~/.config/opencode/opencode.json`:
 
 ```json
 {
-  "plugin": [
-    [
-      "opencode-auto-permissions@git+https://github.com/hueyexe/opencode-auto-permissions.git#v0.2.0",
-      { "model": "openai/gpt-5.6-luna", "variant": "low" }
-    ]
-  ],
   "permission": {
     "bash": {
       "*": "allow",
@@ -44,22 +54,26 @@ Add the tagged Git package, reviewer model, and risk-based permission rules to y
 
 OpenCode uses the last matching permission rule, so keep the broad `"*": "allow"` rule first and the narrower `ask` rules after it. Adapt the list to your environment: deployments, infrastructure commands, package publication, and production database tools are good candidates for contextual review.
 
-Use any configured model in `provider/model` form. A fast, reliable model that follows JSON instructions works best. Set `variant` to the model's low-reasoning variant when available: permission decisions need some contextual reasoning, but deep reasoning adds unnecessary latency. Restart OpenCode after changing the config.
+To confirm installation, restart OpenCode and inspect both global files for the package entry. Actions resolved by `allow` or `deny` rules will not invoke the plugin; use an `ask` rule to exercise automatic review.
 
-V2 users must add the same plugin tuple to `~/.config/opencode/tui.json` so the TUI adapter can resolve V2 permission events:
+## Update
 
-```json
-{
-  "plugin": [
-    [
-      "opencode-auto-permissions@git+https://github.com/hueyexe/opencode-auto-permissions.git#v0.2.0",
-      { "model": "openai/gpt-5.6-luna", "variant": "low" }
-    ]
-  ]
-}
+Install the latest published version over the existing global entry:
+
+```bash
+opencode plugin -g --force opencode-auto-permissions@latest
 ```
 
-Stable OpenCode does not need the TUI entry. Keep the tag pinned in both files when using V2, and update both entries together.
+Restart OpenCode after updating. If you use an advanced options tuple, confirm that the server and TUI entries still contain the same options after the update.
+
+## Uninstall
+
+The current OpenCode CLI does not provide a plugin removal subcommand. Remove the `opencode-auto-permissions` string or tuple from the `plugin` arrays in both files, then restart OpenCode:
+
+- `~/.config/opencode/opencode.json`
+- `~/.config/opencode/tui.json`
+
+Remove only this package's entries; leave other plugins and configuration unchanged.
 
 ## How It Works
 
@@ -78,9 +92,11 @@ For each supported permission request, Auto Permissions combines deterministic s
 
 The reviewer never receives authority to execute the requested action. It always resolves the request by approving once, approving narrow matching requests for the current session, or rejecting with an actionable reason. Session approvals are held in memory by OpenCode and do not persist to later sessions.
 
-Reviewer sessions are standalone, deleted after each decision or failure, and swept on plugin startup if a prior process exited before cleanup. The sweep targets only sessions titled exactly `Auto Permissions review`; it never prunes user sessions or project conversation history.
+Reviewer sessions are standalone and deleted after each decision or failure. Startup never deletes reviewer sessions because multiple OpenCode processes may be reviewing permissions concurrently; one process must not delete another process's active review.
 
 Auto Permissions never asks the user to resolve a permission prompt. When the reviewer cannot safely approve, it denies and tells the coding agent why, what safer alternative to try, and to continue autonomously where possible.
+
+Denial and failure continuations preserve the main session's selected agent, model, and variant. A permission decision does not reset the primary agent's reasoning effort.
 
 ### Session Approvals
 
@@ -110,16 +126,27 @@ The plugin tuple accepts these options:
 
 | Option | Default | Description |
 | --- | --- | --- |
-| `model` | Required | Reviewer model in `provider/model` form. |
-| `variant` | Provider default | Optional reviewer-only model variant. Use `"low"` when supported for faster decisions. |
+| `model` | Requesting session model | Optional dedicated reviewer model in `provider/model` form. |
+| `variant` | Selected model's default | Optional reviewer-only model variant. Use `"low"` when supported for faster decisions. |
 | `sessionApprovals` | `true` | Allow guarded, pattern-specific approvals for the current OpenCode session. Set `false` for one-time approvals only. |
-| `timeoutMs` | `8000` | Review timeout from 100 to 30,000 milliseconds. |
+| `timeoutMs` | `30000` | Review timeout from 100 to 30,000 milliseconds. The default accommodates a cold reviewer startup. |
 | `userMessageCount` | `8` | Recent user messages included in review context, from 1 to 20. |
 | `shadow` | `false` | Evaluate and record decisions without replying to permission requests. |
 | `runtime` | `"auto"` | Diagnostics override: `"auto"`, `"stable"`, or `"v2"`. Leave this on `"auto"` in normal use. |
 | `debug` | `false` | Write the latest 100 privacy-minimized outcomes to a JSONL file. Use `true` for the default path or provide a file path. |
 
-Start with `shadow: true` if you want to observe behavior before enabling automatic replies.
+Start with `shadow: true` if you want to observe behavior before enabling automatic replies. Because options are an advanced manual configuration, edit both generated entries so the server and TUI receive identical settings.
+
+No configuration tuple is required. To override the automatic session-model selection with a dedicated reviewer model, or to use other advanced options, replace the package string in both generated plugin entries with the same options tuple:
+
+```json
+[
+  "opencode-auto-permissions",
+  { "model": "openai/gpt-5.6-luna", "variant": "low" }
+]
+```
+
+Keep the entries in `~/.config/opencode/opencode.json` and `~/.config/opencode/tui.json` synchronized. A fast, reliable model that follows JSON instructions works best; deep reasoning adds unnecessary latency for permission review. Restart OpenCode after changing either file.
 
 With `debug: true`, diagnostics are written to `$XDG_STATE_HOME/opencode/auto-permissions/decisions.jsonl` (normally `~/.local/state/opencode/auto-permissions/decisions.jsonl`). Records include action type, timing, verdict, reason, reply result, and failure category. Commands, paths, tool inputs, and conversation text are not logged.
 
@@ -127,11 +154,11 @@ Access to this bounded diagnostics file is deterministically allowed by the plug
 
 Reviewer sessions are standalone rather than children of the active coding session. This keeps reviewer model and variant state isolated from the main agent and its displayed reasoning level.
 
-The plugin does not force a universal reasoning level because variant names differ by provider. The quick start explicitly uses `"low"`; omitting `variant` uses the provider default. Avoid high or maximum reasoning for permission review unless your policy requires unusually complex analysis.
+The plugin does not force a universal reasoning level because variant names differ by provider. Omitting `variant` uses the selected model's variant. Avoid high or maximum reasoning for permission review unless your policy requires unusually complex analysis.
 
 ## Compatibility
 
-Release `v0.2.0` has been acceptance-tested in the real TUI with:
+The compatibility baseline was acceptance-tested in the real TUI with:
 
 - OpenCode stable `1.18.12`
 - OpenCode V2 `0.0.0-beta-202608040144`
@@ -140,7 +167,9 @@ The runtime protocol is detected automatically; stable permission events are han
 
 ## Development
 
-Requires [Bun](https://bun.sh/) and Node.js 22 or later.
+This section is only for contributors. Users installing through `opencode plugin` do not need Bun or a repository checkout.
+
+Development requires [Bun](https://bun.sh/) and Node.js 22 or later:
 
 ```bash
 bun install

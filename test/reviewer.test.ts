@@ -26,7 +26,14 @@ function harness(options: Record<string, unknown> = { model: "openai/gpt-5.6-lun
           list: () => {
             const command = requests[0]?.resources[0] ?? "pnpm test"
             return [
-              { id: "msg_user", type: "user", time: { created: 1 }, text: "Run the tests." },
+              {
+                id: "msg_user",
+                type: "user",
+                role: "user",
+                time: { created: 1 },
+                text: "Run the tests.",
+                model: { providerID: "example", modelID: "main" },
+              },
               {
                 id: "msg_assistant",
                 type: "assistant",
@@ -129,6 +136,24 @@ async function settle() {
 }
 
 describe("installReviewer", () => {
+  test("uses the requesting session model when no reviewer model is configured", async () => {
+    const app = harness({})
+    let model: Parameters<ReviewerClient["generate"]>[0]["model"] | undefined
+    app.client.generate = async (input) => {
+      model = input.model
+      return { decision: "allow", reasonCode: "requested_action", reason: "The user requested this action." }
+    }
+    app.requests.push(request("git push origin feature"))
+    const dispose = installReviewer(app.context, { client: app.client })
+
+    app.emit("permission.v2.asked", app.requests[0])
+    await settle()
+
+    expect(model).toEqual({ providerID: "example", id: "main" })
+    expect(app.replies).toHaveLength(1)
+    dispose()
+  })
+
   test("silently approves a deterministic safe command once", async () => {
     const app = harness()
     app.requests.push(request("pnpm test"))
@@ -315,6 +340,25 @@ describe("installReviewer", () => {
     expect(app.replies[0]).toMatchObject({ reply: "reject", message: expect.stringContaining("review failed") })
     expect(app.requests).toHaveLength(0)
     expect(app.resumptions[0]?.reason).toContain("narrower or lower-risk step")
+    dispose()
+  })
+
+  test("reports an aborted generation as a timeout when its deadline expires", async () => {
+    const app = harness({ model: "openai/gpt-5.6-luna", timeoutMs: 100 })
+    app.client.generate = async ({ signal }) => {
+      await new Promise<void>((_resolve, reject) => {
+        signal.addEventListener("abort", () => reject(new Error("Aborted")), { once: true })
+      })
+      throw new Error("unreachable")
+    }
+    app.requests.push(request("git push origin feature"))
+    const dispose = installReviewer(app.context, { client: app.client })
+
+    app.emit("permission.v2.asked", app.requests[0])
+    await new Promise((resolve) => setTimeout(resolve, 120))
+
+    expect(app.replies[0]?.message).toContain("review timed out")
+    expect(app.resumptions[0]?.reason).toContain("timed out")
     dispose()
   })
 

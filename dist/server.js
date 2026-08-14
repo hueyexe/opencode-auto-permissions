@@ -139,25 +139,16 @@ async function appendBounded(path, record) {
 }
 
 // src/config.ts
-var DEFAULT_TIMEOUT_MS = 8000;
+var DEFAULT_TIMEOUT_MS = 30000;
 var DEFAULT_USER_MESSAGE_COUNT = 8;
 function parseConfig(options) {
   const modelValue = options.model;
-  if (typeof modelValue !== "string" || !modelValue.trim()) {
-    throw new Error('Auto Permissions requires a "model" option in provider/model form');
-  }
-  const slash = modelValue.indexOf("/");
-  if (slash < 1 || slash === modelValue.length - 1) {
-    throw new Error('Auto Permissions model must use "provider/model" form');
-  }
-  const providerID = modelValue.slice(0, slash).trim();
-  const id = modelValue.slice(slash + 1).trim();
-  if (!providerID || !id)
-    throw new Error('Auto Permissions model must use "provider/model" form');
   const variant = parseVariant(options.variant);
+  const model = parseModel(modelValue, variant);
   return {
-    model: { providerID, id, ...variant ? { variant } : {} },
-    modelLabel: modelValue,
+    model,
+    modelLabel: typeof modelValue === "string" ? modelValue : undefined,
+    variant,
     timeoutMs: boundedInteger(options.timeoutMs, DEFAULT_TIMEOUT_MS, 100, 30000, "timeoutMs"),
     userMessageCount: boundedInteger(options.userMessageCount, DEFAULT_USER_MESSAGE_COUNT, 1, 20, "userMessageCount"),
     shadow: options.shadow === true,
@@ -165,6 +156,22 @@ function parseConfig(options) {
     runtime: parseRuntime(options.runtime),
     diagnosticsPath: parseDiagnosticsPath(options.debug)
   };
+}
+function parseModel(value, variant) {
+  if (value === undefined)
+    return;
+  if (typeof value !== "string" || !value.trim()) {
+    throw new Error('Auto Permissions model must use "provider/model" form');
+  }
+  const slash = value.indexOf("/");
+  if (slash < 1 || slash === value.length - 1) {
+    throw new Error('Auto Permissions model must use "provider/model" form');
+  }
+  const providerID = value.slice(0, slash).trim();
+  const id = value.slice(slash + 1).trim();
+  if (!providerID || !id)
+    throw new Error('Auto Permissions model must use "provider/model" form');
+  return { providerID, id, ...variant ? { variant } : {} };
 }
 function parseVariant(value) {
   if (value === undefined)
@@ -231,7 +238,6 @@ class OpenCodeClientAdapter {
     if (requests.length === 0)
       throw new Error("OpenCode reviewer prewarm APIs are unavailable");
     await Promise.all(requests);
-    await this.deleteStaleReviewerSessions();
   }
   async generate(input) {
     const stable = typeof this.client.postSessionIdPermissionsPermissionId === "function";
@@ -320,22 +326,6 @@ Example: {"decision":"allow","reasonCode":"authorized_action","reason":"The acti
         });
       }
     }
-  }
-  async deleteStaleReviewerSessions() {
-    const stable = typeof this.client.postSessionIdPermissionsPermissionId === "function";
-    const session = stable ? this.client.session : this.client.v2?.session ?? this.client.session;
-    if (!session || typeof session.list !== "function" || typeof session.delete !== "function")
-      return;
-    const location = { directory: REVIEWER_DIRECTORY };
-    const listInput = stable ? { query: location } : location;
-    const result = unwrapData(await session.list(listInput));
-    const sessions = Array.isArray(result) ? result : isRecord(result) && Array.isArray(result.data) ? result.data : [];
-    await Promise.all(sessions.filter((value) => isRecord(value) && value.title === REVIEWER_SESSION_TITLE && typeof value.id === "string").map((value) => {
-      const deleteInput = stable ? { path: { id: value.id }, query: location } : { sessionID: value.id, ...location };
-      return Promise.resolve(session.delete(deleteInput)).catch(() => {
-        return;
-      });
-    }));
   }
   async reply(input) {
     try {
@@ -487,6 +477,7 @@ async function collectReviewInput(context, request, userMessageCount) {
     return text === undefined ? [] : [text.slice(0, MAX_MESSAGE_CHARS)];
   }).slice(-userMessageCount);
   const currentDirectory = directory(context);
+  const model = latestUserModel(messages);
   return {
     request: {
       action: request.action,
@@ -497,9 +488,27 @@ async function collectReviewInput(context, request, userMessageCount) {
     context: {
       rootSessionID,
       ...currentDirectory ? { directory: currentDirectory } : {},
-      userMessages
+      userMessages,
+      ...model ? { model } : {}
     }
   };
+}
+function latestUserModel(messages) {
+  for (let index = messages.length - 1;index >= 0; index--) {
+    const message = messages[index];
+    if (!isRecord2(message))
+      continue;
+    const info = isRecord2(message.info) ? message.info : message;
+    if (info.role !== "user" || !isRecord2(info.model))
+      continue;
+    const providerID = info.model.providerID;
+    const id = info.model.modelID ?? info.model.id;
+    if (typeof providerID !== "string" || typeof id !== "string")
+      continue;
+    const variant = typeof info.model.variant === "string" ? info.model.variant : undefined;
+    return { providerID, id, ...variant ? { variant } : {} };
+  }
+  return;
 }
 async function isRequestPending(context, request) {
   await context.data.session.permission.sync(request.sessionID);
@@ -882,18 +891,29 @@ function cancelReview(config, inFlight, requestID) {
   controller.abort("permission resolved");
 }
 async function modelDecision(context, client, config, input, parentSignal) {
+  const inheritedModel = input.context.model;
+  const model = config.model ?? (inheritedModel ? { ...inheritedModel, ...config.variant ? { variant: config.variant } : {} } : undefined);
+  if (!model)
+    throw new Error("Auto Permissions could not determine the requesting session model");
   const timeout = new AbortController;
   const timer = setTimeout(() => timeout.abort("review timed out"), config.timeoutMs);
   const abort = () => timeout.abort(parentSignal.reason);
   parentSignal.addEventListener("abort", abort, { once: true });
   try {
-    const structured = await client.generate({
-      prompt: buildReviewPrompt(input),
-      model: config.model,
-      parentSessionID: input.context.rootSessionID,
-      ...input.context.directory ? { location: { directory: input.context.directory } } : {},
-      signal: timeout.signal
-    });
+    let structured;
+    try {
+      structured = await client.generate({
+        prompt: buildReviewPrompt(input),
+        model,
+        parentSessionID: input.context.rootSessionID,
+        ...input.context.directory ? { location: { directory: input.context.directory } } : {},
+        signal: timeout.signal
+      });
+    } catch (error) {
+      if (timeout.signal.aborted && !parentSignal.aborted)
+        throw new Error("Permission review timed out");
+      throw error;
+    }
     const decision = parseDecision(structured);
     if (!decision)
       throw new Error("Reviewer returned an invalid decision");
@@ -997,10 +1017,12 @@ function createStableRuntime(injectedClient, options, directory2) {
       waitForIdle(client, sessionID, directory2, controller.signal).then((idle) => {
         if (!idle || controller.signal.aborted)
           return;
+        const routing = latestUserRouting(messages.get(sessionID) ?? []);
         return client.session.promptAsync({
           path: { id: sessionID },
           query: { directory: directory2 },
           body: {
+            ...routing,
             parts: [{
               type: "text",
               text: `${AUTO_PERMISSIONS_MESSAGE_PREFIX} ${reason} Do not retry the exact blocked action. Continue the task using a safer alternative when possible; ask the user only if no useful safe path remains.`
@@ -1043,6 +1065,28 @@ function createStableRuntime(injectedClient, options, directory2) {
       resumeControllers.clear();
     }
   };
+}
+function latestUserRouting(messages) {
+  for (let index = messages.length - 1;index >= 0; index--) {
+    const message = messages[index];
+    if (!isRecord4(message))
+      continue;
+    const info = isRecord4(message.info) ? message.info : message;
+    if (info.role !== "user")
+      continue;
+    const agent = typeof info.agent === "string" ? info.agent : undefined;
+    const modelValue = isRecord4(info.model) ? info.model : undefined;
+    const providerID = modelValue?.providerID;
+    const modelID = modelValue?.modelID ?? modelValue?.id;
+    const model = typeof providerID === "string" && typeof modelID === "string" ? { providerID, modelID } : undefined;
+    const variant = typeof modelValue?.variant === "string" ? modelValue.variant : undefined;
+    return {
+      ...agent ? { agent } : {},
+      ...model ? { model } : {},
+      ...variant ? { variant } : {}
+    };
+  }
+  return {};
 }
 async function waitForIdle(client, sessionID, directory2, signal) {
   if (typeof client.session?.status !== "function") {
@@ -1107,7 +1151,8 @@ var v2Plugin = {
     const config = parseConfig(context.options);
     await context.agent.transform((draft) => {
       draft.update(REVIEWER_AGENT_ID, (agent) => {
-        agent.model = config.model;
+        if (config.model)
+          agent.model = config.model;
         agent.system = REVIEWER_SYSTEM_PROMPT;
         agent.description = "Hidden, no-tool permission reviewer used by OpenCode Auto Permissions.";
         agent.mode = "subagent";
@@ -1144,8 +1189,8 @@ var legacyPlugin = async (input, options = {}) => {
     async config(value) {
       value.agent ??= {};
       const reviewer = {
-        model: `${config.model.providerID}/${config.model.id}`,
-        ...config.model.variant ? { variant: config.model.variant } : {},
+        ...config.model ? { model: `${config.model.providerID}/${config.model.id}` } : {},
+        ...config.model?.variant ? { variant: config.model.variant } : {},
         prompt: REVIEWER_SYSTEM_PROMPT,
         description: "Hidden, no-tool permission reviewer used by OpenCode Auto Permissions.",
         mode: "subagent",

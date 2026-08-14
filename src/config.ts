@@ -1,12 +1,13 @@
 import type { ReviewModel } from "./types.ts"
 import { defaultDiagnosticsPath } from "./diagnostics.ts"
 
-const DEFAULT_TIMEOUT_MS = 8_000
+const DEFAULT_TIMEOUT_MS = 30_000
 const DEFAULT_USER_MESSAGE_COUNT = 8
 
 export interface Config {
-  model: ReviewModel
-  modelLabel: string
+  model: ReviewModel | undefined
+  modelLabel: string | undefined
+  variant: string | undefined
   timeoutMs: number
   userMessageCount: number
   shadow: boolean
@@ -17,23 +18,13 @@ export interface Config {
 
 export function parseConfig(options: Readonly<Record<string, unknown>>): Config {
   const modelValue = options.model
-  if (typeof modelValue !== "string" || !modelValue.trim()) {
-    throw new Error('Auto Permissions requires a "model" option in provider/model form')
-  }
-
-  const slash = modelValue.indexOf("/")
-  if (slash < 1 || slash === modelValue.length - 1) {
-    throw new Error('Auto Permissions model must use "provider/model" form')
-  }
-
-  const providerID = modelValue.slice(0, slash).trim()
-  const id = modelValue.slice(slash + 1).trim()
-  if (!providerID || !id) throw new Error('Auto Permissions model must use "provider/model" form')
   const variant = parseVariant(options.variant)
+  const model = parseModel(modelValue, variant)
 
   return {
-    model: { providerID, id, ...(variant ? { variant } : {}) },
-    modelLabel: modelValue,
+    model,
+    modelLabel: typeof modelValue === "string" ? modelValue : undefined,
+    variant,
     timeoutMs: boundedInteger(options.timeoutMs, DEFAULT_TIMEOUT_MS, 100, 30_000, "timeoutMs"),
     userMessageCount: boundedInteger(
       options.userMessageCount,
@@ -47,6 +38,21 @@ export function parseConfig(options: Readonly<Record<string, unknown>>): Config 
     runtime: parseRuntime(options.runtime),
     diagnosticsPath: parseDiagnosticsPath(options.debug),
   }
+}
+
+function parseModel(value: unknown, variant: string | undefined): ReviewModel | undefined {
+  if (value === undefined) return undefined
+  if (typeof value !== "string" || !value.trim()) {
+    throw new Error('Auto Permissions model must use "provider/model" form')
+  }
+  const slash = value.indexOf("/")
+  if (slash < 1 || slash === value.length - 1) {
+    throw new Error('Auto Permissions model must use "provider/model" form')
+  }
+  const providerID = value.slice(0, slash).trim()
+  const id = value.slice(slash + 1).trim()
+  if (!providerID || !id) throw new Error('Auto Permissions model must use "provider/model" form')
+  return { providerID, id, ...(variant ? { variant } : {}) }
 }
 
 function parseVariant(value: unknown): string | undefined {

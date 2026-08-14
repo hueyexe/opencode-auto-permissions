@@ -1,10 +1,12 @@
 import type { TuiPlugin, TuiPluginApi } from "@opencode-ai/plugin/tui"
 import type { RuntimeContext } from "./types.ts"
 import { installReviewer } from "./reviewer.ts"
+import { protocolForVersion } from "./stable.ts"
 
 export const id = "opencode.auto-permissions"
 
 export const tui: TuiPlugin = async (api, options) => {
+  if (await isStableRuntime(api.client)) return
   const dispose = installReviewer(fromLegacyApi(api, options ?? {}), { protocols: ["v2"] })
   api.lifecycle.onDispose(dispose)
 }
@@ -12,12 +14,24 @@ export const tui: TuiPlugin = async (api, options) => {
 const plugin = {
   id,
   tui,
-  setup(context: RuntimeContext) {
+  async setup(context: RuntimeContext) {
+    if (await isStableRuntime(context.client)) return
     return installReviewer(fromCurrentContext(context), { protocols: ["v2"] })
   },
 }
 
 export default plugin
+
+async function isStableRuntime(client: any): Promise<boolean> {
+  if (typeof client?.global?.health !== "function") return false
+  try {
+    const result = await client.global.health()
+    const value = result?.data ?? result
+    return protocolForVersion(value?.version) === "stable"
+  } catch {
+    return false
+  }
+}
 
 function fromCurrentContext(context: RuntimeContext & { ui?: any }): RuntimeContext {
   if (context.showToast) return context
