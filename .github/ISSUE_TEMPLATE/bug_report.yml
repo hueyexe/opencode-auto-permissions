@@ -1,0 +1,61 @@
+name: Bug Report
+description: Something isn't working as expected
+labels: ["bug"]
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: Describe the bug. What did you expect to happen?
+      placeholder: |
+        A permission prompt hangs instead of being resolved automatically.
+        Expected the reviewer to reply within the timeout.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: Minimal steps to trigger the bug, including the permission rule that matches.
+      placeholder: |
+        1. Configure a bash rule as `ask`
+        2. Ask the agent to run a matching command
+        3. ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs or decisions
+      description: Paste error messages, toasts, or recent lines from the diagnostics file (`debug: true`).
+      render: shell
+
+  - type: input
+    id: version
+    attributes:
+      label: Plugin version
+      placeholder: "0.2.5"
+    validations:
+      required: true
+
+  - type: input
+    id: opencode-version
+    attributes:
+      label: OpenCode version
+      placeholder: "1.18.16"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - macOS
+        - Linux
+        - Windows (WSL)
+        - Other
+    validations:
+      required: true
