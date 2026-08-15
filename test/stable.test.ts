@@ -31,7 +31,7 @@ function client() {
               id: "msg_user",
               role: "user",
               agent: "build",
-              model: { providerID: "openai", modelID: "gpt-5.6-luna", variant: "max" },
+              model: { providerID: "cloudflare-workers-ai", modelID: "@cf/deepseek-ai/deepseek-v4-flash-0731", variant: "max" },
             },
             parts: [{ type: "text", text: "Inspect the repository." }],
           },
@@ -69,7 +69,7 @@ describe("createStableRuntime", () => {
   test("does not permanently classify an unavailable version", async () => {
     const runtime = createStableRuntime(
       { ...client(), global: {} },
-      { model: "openai/gpt-5.6-luna" },
+      { model: "cloudflare-workers-ai/@cf/deepseek-ai/deepseek-v4-flash-0731" },
       "/repo",
     )
 
@@ -79,7 +79,7 @@ describe("createStableRuntime", () => {
 
   test("resumes the session with safe continuation guidance after a denial", async () => {
     const injected = client()
-    const runtime = createStableRuntime(injected, { model: "openai/gpt-5.6-luna" }, "/repo")
+    const runtime = createStableRuntime(injected, { model: "cloudflare-workers-ai/@cf/deepseek-ai/deepseek-v4-flash-0731" }, "/repo")
     await runtime.context.data.session.message.sync("ses_child")
 
     runtime.context.resumeAfterDenial?.("ses_child", "The user explicitly prohibited this action.")
@@ -91,7 +91,7 @@ describe("createStableRuntime", () => {
         query: { directory: "/repo" },
         body: {
           agent: "build",
-          model: { providerID: "openai", modelID: "gpt-5.6-luna" },
+          model: { providerID: "cloudflare-workers-ai", modelID: "@cf/deepseek-ai/deepseek-v4-flash-0731" },
           variant: "max",
           parts: [{
             type: "text",
@@ -104,7 +104,7 @@ describe("createStableRuntime", () => {
   })
 
   test("normalizes legacy permission.updated events and resolves root context", async () => {
-    const runtime = createStableRuntime(client(), { model: "openai/gpt-5.6-luna" }, "/repo")
+    const runtime = createStableRuntime(client(), { model: "cloudflare-workers-ai/@cf/deepseek-ai/deepseek-v4-flash-0731" }, "/repo")
     const seen: unknown[] = []
     runtime.context.data.on("permission.asked", (event) => seen.push(event))
 
@@ -134,7 +134,7 @@ describe("createStableRuntime", () => {
   })
 
   test("normalizes stable permission replies", () => {
-    const runtime = createStableRuntime(client(), { model: "openai/gpt-5.6-luna" }, "/repo")
+    const runtime = createStableRuntime(client(), { model: "cloudflare-workers-ai/@cf/deepseek-ai/deepseek-v4-flash-0731" }, "/repo")
     const seen: unknown[] = []
     runtime.context.data.on("permission.replied", (event) => seen.push(event))
 

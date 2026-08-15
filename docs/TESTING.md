@@ -12,9 +12,12 @@ they do not configure the plugin's runtime behavior.
 ## Prerequisites
 
 - Run from this repository.
-- Configure the selected reviewer model in your normal OpenCode config.
-- Override the default model with `AUTO_PERMISSIONS_MODEL=provider/model` if
-  required. The default is `openai/gpt-5.6-luna`.
+- The default reviewer model is
+  `cloudflare-workers-ai/@cf/deepseek-ai/deepseek-v4-flash-0731`, resolved
+  through models.dev with credentials stored by `opencode auth` (or the
+  `CLOUDFLARE_API_KEY` and `CLOUDFLARE_ACCOUNT_ID` environment variables).
+- Override the default with `AUTO_PERMISSIONS_MODEL=provider/model`, using any
+  model available in your normal OpenCode config or through models.dev.
 
 ## Test Stable OpenCode
 

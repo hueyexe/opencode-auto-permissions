@@ -3,9 +3,9 @@ import { parseConfig } from "../src/config.ts"
 
 describe("parseConfig", () => {
   test("parses an arbitrary provider/model reference", () => {
-    expect(parseConfig({ model: "openai/gpt-5.6-luna" })).toEqual({
-      model: { providerID: "openai", id: "gpt-5.6-luna" },
-      modelLabel: "openai/gpt-5.6-luna",
+    expect(parseConfig({ model: "cloudflare-workers-ai/@cf/deepseek-ai/deepseek-v4-flash-0731" })).toEqual({
+      model: { providerID: "cloudflare-workers-ai", id: "@cf/deepseek-ai/deepseek-v4-flash-0731" },
+      modelLabel: "cloudflare-workers-ai/@cf/deepseek-ai/deepseek-v4-flash-0731",
       variant: undefined,
       timeoutMs: 30_000,
       userMessageCount: 8,
@@ -24,10 +24,10 @@ describe("parseConfig", () => {
   })
 
   test("applies an optional reviewer variant", () => {
-    expect(parseConfig({ model: "openai/gpt-5.6-luna", variant: "low" }).model).toEqual({
-      providerID: "openai",
-      id: "gpt-5.6-luna",
-      variant: "low",
+    expect(parseConfig({ model: "cloudflare-workers-ai/@cf/deepseek-ai/deepseek-v4-flash-0731", variant: "high" }).model).toEqual({
+      providerID: "cloudflare-workers-ai",
+      id: "@cf/deepseek-ai/deepseek-v4-flash-0731",
+      variant: "high",
     })
     expect(() => parseConfig({ model: "a/b", variant: "" })).toThrow(/variant/)
   })
@@ -36,7 +36,7 @@ describe("parseConfig", () => {
     expect(parseConfig({})).toMatchObject({ model: undefined, modelLabel: undefined, variant: undefined })
   })
 
-  test.each([{ model: "" }, { model: "gpt-5.6-luna" }, { model: "/gpt-5.6-luna" }, { model: "provider/" }])(
+  test.each([{ model: "" }, { model: "deepseek-v4-flash-0731" }, { model: "/deepseek-v4-flash-0731" }, { model: "provider/" }])(
     "rejects invalid model option %#",
     (options) => expect(() => parseConfig(options)).toThrow(),
   )

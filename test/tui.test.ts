@@ -6,7 +6,7 @@ function context(version: string): { context: RuntimeContext; subscriptions: str
   const subscriptions: string[] = []
   return {
     context: {
-      options: { model: "openai/gpt-5.6-luna" },
+      options: { model: "cloudflare-workers-ai/@cf/deepseek-ai/deepseek-v4-flash-0731" },
       client: {
         global: { health: async () => ({ data: { healthy: true, version } }) },
       },

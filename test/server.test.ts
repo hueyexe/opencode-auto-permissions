@@ -41,13 +41,13 @@ describe("server plugin", () => {
 
   test("registers the hidden reviewer agent through the beta config hook", async () => {
     const factory = server.server
-    const hooks = await factory(pluginInput(), { model: "openai/gpt-5.6-luna" })
+    const hooks = await factory(pluginInput(), { model: "cloudflare-workers-ai/@cf/deepseek-ai/deepseek-v4-flash-0731" })
     const config: any = {}
 
     await hooks.config?.(config)
 
     expect(config.agent["auto-permissions-reviewer"]).toMatchObject({
-      model: "openai/gpt-5.6-luna",
+      model: "cloudflare-workers-ai/@cf/deepseek-ai/deepseek-v4-flash-0731",
       mode: "subagent",
       hidden: true,
       steps: 1,
@@ -57,7 +57,7 @@ describe("server plugin", () => {
   })
 
   test("strips ambient context only for the hidden reviewer request", async () => {
-    const hooks = await server.server(pluginInput(), { model: "openai/gpt-5.6-luna" })
+    const hooks = await server.server(pluginInput(), { model: "cloudflare-workers-ai/@cf/deepseek-ai/deepseek-v4-flash-0731" })
     const reviewerSystem = ["large global prompt", "skills", "mcp"]
     const regularSystem = ["regular prompt"]
 
@@ -65,7 +65,7 @@ describe("server plugin", () => {
       {
         sessionID: "ses_review",
         agent: "auto-permissions-reviewer",
-        model: { providerID: "openai", modelID: "gpt-5.6-luna" },
+        model: { providerID: "cloudflare-workers-ai", modelID: "@cf/deepseek-ai/deepseek-v4-flash-0731" },
       },
       {} as never,
     )

@@ -224,7 +224,7 @@ describe("OpenCodeClientAdapter", () => {
     await expect(
       client.generate({
         prompt: "review",
-        model: { providerID: "openai", id: "gpt-5.6-luna" },
+        model: { providerID: "cloudflare-workers-ai", id: "@cf/deepseek-ai/deepseek-v4-flash-0731" },
         parentSessionID: "ses_parent",
         signal: controller.signal,
       }),

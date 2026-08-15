@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { installReviewer } from "../src/reviewer.ts"
 import type { PermissionRequest, ReviewerClient, RuntimeContext } from "../src/types.ts"
 
-function harness(options: Record<string, unknown> = { model: "openai/gpt-5.6-luna" }) {
+function harness(options: Record<string, unknown> = { model: "cloudflare-workers-ai/@cf/deepseek-ai/deepseek-v4-flash-0731" }) {
   const handlers = new Map<string, Set<(event: unknown) => void>>()
   const requests: PermissionRequest[] = []
   const replies: Parameters<ReviewerClient["reply"]>[0][] = []
@@ -229,7 +229,7 @@ describe("installReviewer", () => {
   })
 
   test("can disable session approvals", async () => {
-    const app = harness({ model: "openai/gpt-5.6-luna", sessionApprovals: false })
+    const app = harness({ model: "cloudflare-workers-ai/@cf/deepseek-ai/deepseek-v4-flash-0731", sessionApprovals: false })
     app.client.generate = async () => ({
       decision: "allow_session",
       reasonCode: "repeatable_fetch",
@@ -306,7 +306,7 @@ describe("installReviewer", () => {
   })
 
   test("rejects a timed-out review and resumes with safer guidance", async () => {
-    const app = harness({ model: "openai/gpt-5.6-luna", timeoutMs: 100 })
+    const app = harness({ model: "cloudflare-workers-ai/@cf/deepseek-ai/deepseek-v4-flash-0731", timeoutMs: 100 })
     app.client.generate = ({ signal }) => new Promise((_resolve, reject) => {
       signal.addEventListener("abort", () => reject(new Error("Review timed out")), { once: true })
     })
@@ -344,7 +344,7 @@ describe("installReviewer", () => {
   })
 
   test("reports an aborted generation as a timeout when its deadline expires", async () => {
-    const app = harness({ model: "openai/gpt-5.6-luna", timeoutMs: 100 })
+    const app = harness({ model: "cloudflare-workers-ai/@cf/deepseek-ai/deepseek-v4-flash-0731", timeoutMs: 100 })
     app.client.generate = async ({ signal }) => {
       await new Promise<void>((_resolve, reject) => {
         signal.addEventListener("abort", () => reject(new Error("Aborted")), { once: true })
@@ -382,7 +382,7 @@ describe("installReviewer", () => {
   })
 
   test("shadow mode records but never replies", async () => {
-    const app = harness({ model: "openai/gpt-5.6-luna", shadow: true })
+    const app = harness({ model: "cloudflare-workers-ai/@cf/deepseek-ai/deepseek-v4-flash-0731", shadow: true })
     app.requests.push(request("pnpm test"))
     const decisions: string[] = []
     const dispose = installReviewer(app.context, {

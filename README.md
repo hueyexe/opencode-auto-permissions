@@ -142,7 +142,7 @@ No configuration tuple is required. To override the automatic session-model sele
 ```json
 [
   "opencode-auto-permissions",
-  { "model": "openai/gpt-5.6-luna", "variant": "low" }
+  { "model": "cloudflare-workers-ai/@cf/deepseek-ai/deepseek-v4-flash-0731" }
 ]
 ```
 
@@ -184,6 +184,8 @@ bun run test:v2
 ```
 
 The launchers leave normal OpenCode configuration and session data untouched. See [Testing](docs/TESTING.md) for setup and acceptance scenarios.
+
+Contributions go through pull requests with prefixed branches. See [Contributing](CONTRIBUTING.md).
 
 ## License
 

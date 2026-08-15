@@ -35,7 +35,7 @@ describe("review context isolation", () => {
                 info: {
                   id: "msg_user",
                   role: "user",
-                  model: { providerID: "openai", modelID: "gpt-5.6-luna", variant: "low" },
+                  model: { providerID: "cloudflare-workers-ai", modelID: "@cf/deepseek-ai/deepseek-v4-flash-0731", variant: "high" },
                 },
                 parts: [
                   { type: "text", text: "DEFAULT SYSTEM PROMPT", synthetic: true },
@@ -86,7 +86,7 @@ describe("review context isolation", () => {
       "Real human instruction",
       "The reviews are complete. I approve the push.",
     ])
-    expect(input.context.model).toEqual({ providerID: "openai", id: "gpt-5.6-luna", variant: "low" })
+    expect(input.context.model).toEqual({ providerID: "cloudflare-workers-ai", id: "@cf/deepseek-ai/deepseek-v4-flash-0731", variant: "high" })
     expect(input.request.sessionPatterns).toEqual([])
     expect(prompt).toContain("Real human instruction")
     expect(prompt).not.toContain("DEFAULT SYSTEM PROMPT")

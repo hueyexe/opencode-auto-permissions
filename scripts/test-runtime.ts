@@ -1,5 +1,5 @@
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises"
-import { rmSync } from "node:fs"
+import { readFileSync, rmSync } from "node:fs"
 import { createServer } from "node:net"
 import { get } from "node:http"
 import { homedir } from "node:os"
@@ -23,7 +23,7 @@ const stableBinary = Bun.which("opencode", { PATH: stablePath })
 if (runtime === "stable" && !stableBinary) throw new Error("Stable OpenCode is not available outside this repository")
 const binary = runtime === "stable" ? stableBinary! : pinnedBeta
 const expectedVersion = runtime === "stable" ? undefined : "0.0.0-beta-202608040144"
-const model = process.env.AUTO_PERMISSIONS_MODEL ?? "openai/gpt-5.6-luna"
+const model = process.env.AUTO_PERMISSIONS_MODEL ?? "cloudflare-workers-ai/@cf/deepseek-ai/deepseek-v4-flash-0731"
 const separator = model.indexOf("/")
 if (separator < 1 || separator === model.length - 1) throw new Error(`Invalid reviewer model: ${model}`)
 const providerID = model.slice(0, separator)
@@ -48,12 +48,7 @@ if (runtime === "stable" && version.startsWith("0.0.0-beta")) {
 }
 
 const source = parse(await readFile(join(homedir(), ".config", "opencode", "opencode.json"), "utf8"))
-const provider = source?.provider?.[providerID]
-if (!provider) throw new Error(`Provider ${providerID} is not configured in ~/.config/opencode/opencode.json`)
-if (!provider.models?.[modelID]) {
-  const available = Object.keys(provider.models ?? {}).join(", ") || "none"
-  throw new Error(`Model ${model} is not configured. Available ${providerID} models: ${available}`)
-}
+const provider = await resolveProvider(source as Record<string, any>, providerID, modelID, model)
 
 await rm(testRoot, { recursive: true, force: true })
 await Promise.all([
@@ -123,6 +118,94 @@ try {
   await stopProcess(server)
   await logs.finish(logFile)
   await rm(lockDirectory, { recursive: true, force: true })
+}
+
+interface Credentials {
+  key: string
+  accountId?: string
+}
+
+async function resolveProvider(
+  source: Record<string, any>,
+  providerID: string,
+  modelID: string,
+  model: string,
+): Promise<Record<string, any>> {
+  const configured = source?.provider?.[providerID]
+  if (configured && configured.models?.[modelID]) return configured
+  const catalog = await modelsDevCatalog()
+  const definition = catalog?.[providerID]
+  const modelDefinition = definition?.models?.[modelID]
+  if (!modelDefinition) {
+    if (configured) {
+      const available = Object.keys(configured.models ?? {}).join(", ") || "none"
+      throw new Error(`Model ${model} is not configured. Available ${providerID} models: ${available}`)
+    }
+    if (definition) {
+      const available = Object.keys(definition.models ?? {}).join(", ") || "none"
+      throw new Error(`Model ${model} is not available through models.dev. Available ${providerID} models: ${available}`)
+    }
+    throw new Error(`Provider ${providerID} is not configured in ~/.config/opencode/opencode.json`)
+  }
+  const credentials = apiCredentials(providerID)
+  if (!credentials) {
+    throw new Error(
+      `Provider ${providerID} is defined by models.dev but has no stored API key. Authenticate with \`opencode auth login\` or set the provider environment variables.`,
+    )
+  }
+  return {
+    ...(typeof definition.npm === "string" ? { npm: definition.npm } : {}),
+    ...(typeof definition.name === "string" ? { name: definition.name } : {}),
+    options: {
+      ...(typeof definition.api === "string" ? { baseURL: expandEnv(definition.api, credentials) } : {}),
+      apiKey: credentials.key,
+    },
+    models: { [modelID]: modelDefinition },
+  }
+}
+
+async function modelsDevCatalog(): Promise<Record<string, any> | undefined> {
+  const cacheRoot = process.env.XDG_CACHE_HOME ?? join(homedir(), ".cache")
+  try {
+    const cached = JSON.parse(await readFile(join(cacheRoot, "opencode", "models.json"), "utf8"))
+    if (cached && typeof cached === "object") return cached
+  } catch {}
+  try {
+    const response = await fetch("https://models.dev/api.json")
+    if (!response.ok) return undefined
+    const remote = (await response.json()) as unknown
+    return remote && typeof remote === "object" ? (remote as Record<string, any>) : undefined
+  } catch {
+    return undefined
+  }
+}
+
+function apiCredentials(providerID: string): Credentials | undefined {
+  const dataHome = process.env.XDG_DATA_HOME ?? join(homedir(), ".local", "share")
+  try {
+    const auth = JSON.parse(readFileSync(join(dataHome, "opencode", "auth.json"), "utf8")) as Record<string, any>
+    const entry = auth?.[providerID]
+    if (!entry || typeof entry.key !== "string" || !entry.key) return undefined
+    const metadata = entry.metadata
+    const accountId = metadata && typeof metadata === "object" && typeof metadata.accountId === "string"
+      ? metadata.accountId
+      : undefined
+    return { key: entry.key, ...(accountId ? { accountId } : {}) }
+  } catch {
+    return undefined
+  }
+}
+
+function expandEnv(value: string, credentials: Credentials): string {
+  return value.replace(/\$\{([A-Z0-9_]+)\}/gi, (_match, name: string) => {
+    const resolved = process.env[name] ?? (name === "CLOUDFLARE_ACCOUNT_ID" ? credentials.accountId : undefined)
+    if (!resolved) {
+      throw new Error(
+        `Provider configuration references \${${name}}, which is not available in the environment or stored credentials`,
+      )
+    }
+    return resolved
+  })
 }
 
 async function freePort(): Promise<number> {
