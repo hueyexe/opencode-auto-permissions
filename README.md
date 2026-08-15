@@ -2,7 +2,7 @@
 
 [![release](https://img.shields.io/github/v/release/hueyexe/opencode-auto-permissions.svg)](https://github.com/hueyexe/opencode-auto-permissions/releases)
 [![npm](https://img.shields.io/npm/v/opencode-auto-permissions.svg)](https://www.npmjs.com/package/opencode-auto-permissions)
-[![tests](https://img.shields.io/badge/tests-87%20passing-brightgreen.svg)](./test)
+[![tests](https://img.shields.io/badge/tests-88%20passing-brightgreen.svg)](./test)
 [![TypeScript](https://img.shields.io/badge/TypeScript-strict-blue.svg)](./tsconfig.json)
 [![OpenCode](https://img.shields.io/badge/OpenCode-stable%20%2B%20V2-blue.svg)](./docs/COMPATIBILITY_SPIKE.md)
 [![license](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
@@ -142,7 +142,7 @@ No configuration tuple is required. To override the automatic session-model sele
 ```json
 [
   "opencode-auto-permissions",
-  { "model": "cloudflare-workers-ai/@cf/deepseek-ai/deepseek-v4-flash-0731" }
+  { "model": "cloudflare-workers-ai/@cf/deepseek-ai/deepseek-v4-flash-0731", "variant": "none" }
 ]
 ```
 

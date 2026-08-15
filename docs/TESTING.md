@@ -16,6 +16,9 @@ they do not configure the plugin's runtime behavior.
   `cloudflare-workers-ai/@cf/deepseek-ai/deepseek-v4-flash-0731`, resolved
   through models.dev with credentials stored by `opencode auth` (or the
   `CLOUDFLARE_API_KEY` and `CLOUDFLARE_ACCOUNT_ID` environment variables).
+  Reasoning models add latency to permission review; prefer the `none`
+  variant (derived from the model's reasoning toggle) for the fastest
+  decisions.
 - Override the default with `AUTO_PERMISSIONS_MODEL=provider/model`, using any
   model available in your normal OpenCode config or through models.dev.
 
