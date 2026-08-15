@@ -262,7 +262,10 @@ class OpenCodeClientAdapter {
         throw abortError(input.signal.reason);
       const createInput = stable ? {
         query: location,
-        body: { title: REVIEWER_SESSION_TITLE }
+        body: {
+          title: REVIEWER_SESSION_TITLE,
+          permission: REVIEWER_PERMISSIONS
+        }
       } : {
         ...location,
         title: REVIEWER_SESSION_TITLE,

@@ -60,7 +60,10 @@ export class OpenCodeClientAdapter implements ReviewerClient {
       const createInput = stable
         ? {
             query: location,
-            body: { title: REVIEWER_SESSION_TITLE },
+            body: {
+              title: REVIEWER_SESSION_TITLE,
+              permission: REVIEWER_PERMISSIONS,
+            },
           }
         : {
             ...location,

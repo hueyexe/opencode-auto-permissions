@@ -205,6 +205,44 @@ describe("OpenCodeClientAdapter", () => {
     expect(prompts[1].parts[0].text).toContain('"decision": one of "allow", "allow_session", or "deny"')
   })
 
+  test("creates the stable reviewer session with a permission ruleset that allows structured output", async () => {
+    const creates: any[] = []
+    const client = new OpenCodeClientAdapter({
+      postSessionIdPermissionsPermissionId: async () => {},
+      session: {
+        create: async (input: unknown) => {
+          creates.push(input)
+          return { data: { id: "ses_review" } }
+        },
+        prompt: async () => ({
+          data: {
+            info: { structured: { decision: "deny", reasonCode: "x", reason: "Review." } },
+            parts: [],
+          },
+        }),
+        delete: async () => ({ data: true }),
+      },
+    })
+
+    await client.generate({
+      prompt: "review",
+      model: { providerID: "example", id: "luna-5.6" },
+      parentSessionID: "ses_parent",
+      signal: new AbortController().signal,
+    })
+
+    expect(creates[0]).toMatchObject({
+      query: { directory: expect.stringContaining("opencode-auto-permissions") },
+      body: {
+        title: "Auto Permissions review",
+        permission: [
+          { permission: "*", pattern: "*", action: "deny" },
+          { permission: "StructuredOutput", pattern: "*", action: "allow" },
+        ],
+      },
+    })
+  })
+
   test("uses the generated stable abort envelope when review is cancelled", async () => {
     const calls: unknown[] = []
     const controller = new AbortController()
