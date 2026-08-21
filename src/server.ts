@@ -1,17 +1,18 @@
-import type { Config, Plugin, PluginModule } from "@opencode-ai/plugin"
-import type { Plugin as V2Plugin } from "@opencode-ai/plugin/v2/promise"
+import { Plugin as V2Plugin } from "@opencode-ai/plugin"
+import type { Config, Plugin, PluginModule } from "@opencode-ai/plugin/v1"
 import { REVIEWER_AGENT_ID, REVIEWER_SYSTEM_PROMPT } from "./agent.ts"
 import { parseConfig } from "./config.ts"
 import { installReviewer } from "./reviewer.ts"
 import { createStableRuntime, protocolForVersion } from "./stable.ts"
 
-const v2Plugin = {
+const v2Plugin = V2Plugin.define({
   id: "opencode.auto-permissions.server",
+  tui: true,
   async setup(context) {
     const config = parseConfig(context.options)
     await context.agent.transform((draft) => {
       draft.update(REVIEWER_AGENT_ID, (agent) => {
-        if (config.model) agent.model = config.model
+        if (config.model) agent.model = config.model as unknown as typeof agent.model
         agent.system = REVIEWER_SYSTEM_PROMPT
         agent.description = "Hidden, no-tool permission reviewer used by OpenCode Auto Permissions."
         agent.mode = "subagent"
@@ -21,7 +22,7 @@ const v2Plugin = {
       })
     })
   },
-} satisfies V2Plugin
+})
 
 const legacyPlugin: Plugin = async (input, options = {}) => {
   const config = parseConfig(options)
@@ -97,6 +98,6 @@ function eventVersion(event: unknown): string | undefined {
 const serverPlugin = {
   ...v2Plugin,
   server: legacyPlugin,
-} satisfies typeof v2Plugin & PluginModule
+} as typeof v2Plugin & PluginModule
 
 export default serverPlugin

@@ -1,6 +1,6 @@
 {
   "name": "opencode-auto-permissions",
-  "version": "0.2.7",
+  "version": "0.2.8",
   "description": "Automatic, context-aware permission review for OpenCode",
   "type": "module",
   "license": "MIT",
@@ -48,14 +48,14 @@
     "node": ">=22"
   },
   "devDependencies": {
-    "@opencode-ai/plugin": "0.0.0-beta-202608040144",
-    "@opencode-ai/sdk": "0.0.0-beta-202608040144",
+    "@opencode-ai/plugin": "0.0.0-beta-17728",
+    "@opencode-ai/sdk": "0.0.0-beta-202608110357",
     "@opentui/core": "0.4.5",
     "@opentui/keymap": "0.4.5",
     "@opentui/solid": "0.4.5",
     "@types/bun": "1.3.14",
     "jsonc-parser": "3.3.1",
-    "opencode-ai": "0.0.0-beta-202608040144",
+    "opencode-ai": "0.0.0-beta-202608110357",
     "typescript": "5.9.3"
   }
 }

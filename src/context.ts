@@ -17,7 +17,7 @@ export function normalizeAskedEvent(event: unknown): PermissionRequest | null {
       action: data.action,
       resources: [...data.resources],
       always: stringArray(data.always),
-      ...(validTool(data.source) ? { source: data.source } : {}),
+      ...(normalizeTool(data.source) ? { source: normalizeTool(data.source)! } : {}),
       protocol: "v2",
     }
   }
@@ -29,8 +29,8 @@ export function normalizeAskedEvent(event: unknown): PermissionRequest | null {
   const resources = Array.isArray(rawResources) ? rawResources : typeof rawResources === "string" ? [rawResources] : []
   if (typeof action !== "string" || resources.length === 0 || !resources.every((item) => typeof item === "string"))
     return null
-  const tool = validTool(data.tool)
-    ? data.tool
+  const tool = normalizeTool(data.tool)
+    ? normalizeTool(data.tool)!
     : typeof data.messageID === "string" && typeof data.callID === "string"
       ? { type: "tool" as const, messageID: data.messageID, callID: data.callID }
       : undefined
@@ -167,13 +167,12 @@ function validRequest(
   )
 }
 
-function validTool(value: unknown): value is { type: "tool"; messageID: string; callID: string } {
-  return Boolean(
-    isRecord(value) &&
-      (value.type === undefined || value.type === "tool") &&
-      typeof value.messageID === "string" &&
-      typeof value.callID === "string",
-  )
+function normalizeTool(value: unknown): { type: "tool"; messageID: string; callID: string } | undefined {
+  if (!isRecord(value) || (value.type !== undefined && value.type !== "tool") || typeof value.messageID !== "string") {
+    return undefined
+  }
+  const callID = typeof value.callID === "string" ? value.callID : value.id
+  return typeof callID === "string" ? { type: "tool", messageID: value.messageID, callID } : undefined
 }
 
 function stringArray(value: unknown): string[] {

@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test"
 import plugin from "../src/tui.ts"
-import type { RuntimeContext } from "../src/types.ts"
+import type { Context } from "@opencode-ai/plugin/tui/plugin"
 
-function context(version: string): { context: RuntimeContext; subscriptions: string[] } {
+function context(version: string): { context: Context; subscriptions: string[] } {
   const subscriptions: string[] = []
   return {
     context: {
@@ -11,31 +11,25 @@ function context(version: string): { context: RuntimeContext; subscriptions: str
         global: { health: async () => ({ data: { healthy: true, version } }) },
       },
       data: {
-        on(type) {
+        on(type: string) {
           subscriptions.push(type)
           return () => {}
         },
         session: {
-          root: (id) => id,
-          get: (id) => ({ id }),
+          root: (id: string) => id,
+          get: (id: string) => ({ id }),
           message: { list: () => [], get: () => undefined, sync: async () => {} },
           permission: { list: () => [], sync: async () => {} },
         },
       },
-    },
+      ui: { toast: { show() {} } },
+    } as unknown as Context,
     subscriptions,
   }
 }
 
 describe("TUI plugin runtime ownership", () => {
-  test("does not subscribe to permission events on stable OpenCode", async () => {
-    const app = context("1.18.12")
-
-    expect(await plugin.setup(app.context)).toBeUndefined()
-    expect(app.subscriptions).toEqual([])
-  })
-
-  test("owns V2 permission events on beta OpenCode", async () => {
+  test("owns V2 permission events", async () => {
     const app = context("0.0.0-beta-202608040144")
 
     const dispose = await plugin.setup(app.context)

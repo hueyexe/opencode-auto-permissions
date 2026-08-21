@@ -26,6 +26,8 @@ export class OpenCodeClientAdapter implements ReviewerClient {
     if (typeof this.client.v2?.skill?.list === "function") {
       requests.push(this.client.v2.skill.list({ location }))
     }
+    if (typeof this.client.agent?.list === "function") requests.push(this.client.agent.list({ location }))
+    if (typeof this.client.skill?.list === "function") requests.push(this.client.skill.list({ location }))
     if (requests.length === 0) throw new Error("OpenCode reviewer prewarm APIs are unavailable")
     await Promise.all(requests)
   }
@@ -37,6 +39,7 @@ export class OpenCodeClientAdapter implements ReviewerClient {
     location?: { directory?: string; workspaceID?: string }
     signal: AbortSignal
   }): Promise<unknown> {
+    if (typeof this.client.permission?.request?.list === "function") return this.generateCurrent(input)
     const stable = typeof this.client.postSessionIdPermissionsPermissionId === "function"
     const session = stable ? this.client.session : (this.client.v2?.session ?? this.client.session)
     if (!session || typeof session.create !== "function" || typeof session.prompt !== "function") {
@@ -135,6 +138,15 @@ export class OpenCodeClientAdapter implements ReviewerClient {
     protocol: "stable" | "v2"
   }): Promise<"replied" | "not_found"> {
     try {
+      if (typeof this.client.permission?.request?.list === "function") {
+        await this.client.permission.reply({
+          sessionID: input.sessionID,
+          requestID: input.requestID,
+          reply: input.reply,
+          ...(input.message ? { message: input.message } : {}),
+        })
+        return "replied"
+      }
       const scoped = this.client.v2?.session?.permission ?? this.client.session?.permission
       if (input.protocol === "v2" && typeof scoped?.reply === "function") {
         try {
@@ -160,6 +172,37 @@ export class OpenCodeClientAdapter implements ReviewerClient {
     } catch (error) {
       if (isNotFound(error)) return "not_found"
       throw error
+    }
+  }
+
+  private async generateCurrent(input: {
+    prompt: string
+    model: ReviewModel
+    signal: AbortSignal
+  }): Promise<unknown> {
+    await mkdir(REVIEWER_DIRECTORY, { recursive: true })
+    let sessionID: string | undefined
+    const abortRemote = () => {
+      if (sessionID) void Promise.resolve(this.client.session.interrupt({ sessionID })).catch(() => undefined)
+    }
+    input.signal.addEventListener("abort", abortRemote, { once: true })
+    try {
+      if (input.signal.aborted) throw abortError(input.signal.reason)
+      const session = await this.client.session.create({
+        title: REVIEWER_SESSION_TITLE,
+        agent: REVIEWER_AGENT_ID,
+        model: input.model,
+        location: { directory: REVIEWER_DIRECTORY },
+      }, { signal: input.signal })
+      if (!isRecord(session) || typeof session.id !== "string") throw new Error("OpenCode failed to create a reviewer session")
+      sessionID = session.id
+      const strictPrompt = `${input.prompt}\n\nReturn only one JSON object without Markdown fences with exactly these keys: "decision" ("allow", "allow_session", or "deny"), "reasonCode" (lower_snake_case), and "reason" (one sentence).`
+      const result = await this.client.session.generate({ sessionID, prompt: strictPrompt }, { signal: input.signal })
+      if (!isRecord(result) || typeof result.text !== "string") throw new Error("OpenCode reviewer returned no text output")
+      return JSON.parse(result.text)
+    } finally {
+      input.signal.removeEventListener("abort", abortRemote)
+      if (sessionID) await Promise.resolve(this.client.session.remove({ sessionID })).catch(() => undefined)
     }
   }
 }

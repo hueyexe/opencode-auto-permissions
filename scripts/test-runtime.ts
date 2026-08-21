@@ -22,7 +22,7 @@ const pinnedBeta = join(localBin, "opencode")
 const stableBinary = Bun.which("opencode", { PATH: stablePath })
 if (runtime === "stable" && !stableBinary) throw new Error("Stable OpenCode is not available outside this repository")
 const binary = runtime === "stable" ? stableBinary! : pinnedBeta
-const expectedVersion = runtime === "stable" ? undefined : "0.0.0-beta-202608040144"
+const expectedVersion = runtime === "stable" ? undefined : "0.0.0-beta-202608110357"
 const model = process.env.AUTO_PERMISSIONS_MODEL ?? "cloudflare-workers-ai/@cf/deepseek-ai/deepseek-v4-flash-0731"
 const separator = model.indexOf("/")
 if (separator < 1 || separator === model.length - 1) throw new Error(`Invalid reviewer model: ${model}`)
@@ -32,7 +32,7 @@ const testRoot = join("/tmp", `opencode-auto-permissions-${runtime}-test`)
 const lockDirectory = join("/tmp", "opencode-auto-permissions-runtime-test.lock")
 const configRoot = join(testRoot, "config")
 const opencodeConfig = join(configRoot, "opencode", "opencode.json")
-const tuiConfig = join(configRoot, "opencode", "tui.json")
+const tuiConfig = join(configRoot, "opencode", runtime === "v2" ? "cli.json" : "tui.json")
 const logFile = join(testRoot, "server.log")
 
 await acquireLock()
@@ -47,8 +47,14 @@ if (runtime === "stable" && version.startsWith("0.0.0-beta")) {
   throw new Error(`Stable launcher resolved a beta OpenCode build: ${binary}`)
 }
 
-const source = parse(await readFile(join(homedir(), ".config", "opencode", "opencode.json"), "utf8"))
-const provider = await resolveProvider(source as Record<string, any>, providerID, modelID, model)
+const provider = headless
+  ? undefined
+  : await resolveProvider(
+      parse(await readFile(join(homedir(), ".config", "opencode", "opencode.json"), "utf8")) as Record<string, any>,
+      providerID,
+      modelID,
+      model,
+    )
 
 await rm(testRoot, { recursive: true, force: true })
 await Promise.all([
@@ -58,7 +64,7 @@ await Promise.all([
   mkdir(join(testRoot, "cache"), { recursive: true }),
 ])
 
-const options = { model }
+const options = headless ? {} : { model }
 await writeTestConfigs()
 
 const port = await freePort()
@@ -312,10 +318,19 @@ async function writeTestConfigs(): Promise<void> {
     JSON.stringify(
       {
         $schema: "https://opencode.ai/config.json",
-        model,
-        provider: { [providerID]: provider },
-        plugin: [[runtime === "v2" ? root : join(root, "dist", "server.js"), options]],
-        permission: { bash: "ask", external_directory: "ask" },
+        ...(headless ? {} : { model, provider: { [providerID]: provider } }),
+        ...(runtime === "v2"
+          ? {
+              plugins: [{ package: root, options }],
+              permissions: [
+                { action: "shell", resource: "*", effect: "ask" },
+                { action: "external_directory", resource: "*", effect: "ask" },
+              ],
+            }
+          : {
+              plugin: [[join(root, "dist", "server.js"), options]],
+              permission: { bash: "ask", external_directory: "ask" },
+            }),
       },
       null,
       2,
@@ -328,8 +343,7 @@ async function writeTestConfigs(): Promise<void> {
     JSON.stringify(
       runtime === "v2"
         ? {
-            $schema: "https://opencode.ai/tui.json",
-            plugin: [[root, options]],
+            plugins: [{ package: join(root, "dist", "tui.js"), options }],
           }
         : {},
       null,

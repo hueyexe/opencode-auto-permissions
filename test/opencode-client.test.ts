@@ -2,6 +2,51 @@ import { describe, expect, test } from "bun:test"
 import { OpenCodeClientAdapter } from "../src/opencode-client.ts"
 
 describe("OpenCodeClientAdapter", () => {
+  test("uses the current V2 session and permission APIs", async () => {
+    const calls: Array<{ method: string; input: any }> = []
+    const adapter = new OpenCodeClientAdapter({
+      agent: { list: async () => [] },
+      skill: { list: async () => [] },
+      session: {
+        create: async (input: any) => {
+          calls.push({ method: "create", input })
+          return { id: "ses_review" }
+        },
+        generate: async (input: any) => {
+          calls.push({ method: "generate", input })
+          return { text: '{"decision":"allow","reasonCode":"safe","reason":"Safe operation."}' }
+        },
+        remove: async (input: any) => calls.push({ method: "remove", input }),
+        interrupt: async () => {},
+      },
+      permission: {
+        request: { list: async () => ({ data: [] }) },
+        reply: async (input: any) => calls.push({ method: "reply", input }),
+      },
+    })
+
+    await adapter.prewarm()
+    await expect(adapter.generate({
+      prompt: "review",
+      model: { providerID: "example", id: "luna-5.6" },
+      parentSessionID: "ses_parent",
+      signal: new AbortController().signal,
+    })).resolves.toEqual({ decision: "allow", reasonCode: "safe", reason: "Safe operation." })
+    await expect(adapter.reply({
+      sessionID: "ses_parent",
+      requestID: "per_1",
+      reply: "once",
+      protocol: "v2",
+    })).resolves.toBe("replied")
+
+    expect(calls.map((call) => call.method)).toEqual(["create", "generate", "remove", "reply"])
+    expect(calls[0]?.input).toMatchObject({
+      agent: "auto-permissions-reviewer",
+      model: { providerID: "example", id: "luna-5.6" },
+    })
+    expect(calls[3]?.input).toEqual({ sessionID: "ses_parent", requestID: "per_1", reply: "once" })
+  })
+
   test("prewarms the reviewer location without invoking a model", async () => {
     const calls: string[] = []
     const client = new OpenCodeClientAdapter({
