@@ -95,4 +95,58 @@ describe("review context isolation", () => {
     expect(prompt).not.toContain("TOOL OUTPUT")
     expect(prompt).not.toContain("Complete reviews first")
   })
+
+  test("includes delegated human instructions from the requesting child session", async () => {
+    const messages = new Map<string, unknown[]>([
+      ["ses_root", [{
+        info: {
+          role: "user",
+          model: { providerID: "kiro", modelID: "gpt-5.6-sol", variant: "high" },
+        },
+        parts: [{ type: "text", text: "Implement the change and finish the task." }],
+      }]],
+      ["ses_child", [{
+        info: {
+          role: "user",
+          model: { providerID: "kiro", modelID: "gpt-5.6-mini", variant: "low" },
+        },
+        parts: [{ type: "text", text: "Push the completed branch to main." }],
+      }]],
+    ])
+    const synced: string[] = []
+    const context: RuntimeContext = {
+      options: {},
+      client: {},
+      data: {
+        on: () => () => {},
+        session: {
+          root: () => "ses_root",
+          get: (id) => id === "ses_child" ? { id, parentID: "ses_root" } : { id },
+          message: {
+            list: (sessionID) => messages.get(sessionID) ?? [],
+            get: () => undefined,
+            sync: async (sessionID) => { synced.push(sessionID) },
+          },
+          permission: { list: () => [], sync: async () => {} },
+        },
+        location: { default: () => ({ directory: "/repo" }) },
+      },
+    }
+
+    const input = await collectReviewInput(context, {
+      id: "per_child",
+      sessionID: "ses_child",
+      action: "shell",
+      resources: ["git push origin main"],
+      always: [],
+      protocol: "v2",
+    }, 8)
+
+    expect(synced).toEqual(["ses_root", "ses_child"])
+    expect(input.context.userMessages).toEqual([
+      "Implement the change and finish the task.",
+      "Push the completed branch to main.",
+    ])
+    expect(input.context.model).toEqual({ providerID: "kiro", id: "gpt-5.6-mini", variant: "low" })
+  })
 })

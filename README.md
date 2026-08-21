@@ -128,7 +128,7 @@ The plugin tuple accepts these options:
 | --- | --- | --- |
 | `model` | Requesting session model | Optional dedicated reviewer model in `provider/model` form. |
 | `variant` | Selected model's default | Optional reviewer-only model variant. Use `"low"` when supported for faster decisions. |
-| `sessionApprovals` | `true` | Allow guarded, pattern-specific approvals for the current OpenCode session. Set `false` for one-time approvals only. |
+| `sessionApprovals` | `true` | Reuse guarded, pattern-specific approvals immediately for the current session. Set `false` for one-time approvals only. |
 | `timeoutMs` | `30000` | Review timeout from 100 to 30,000 milliseconds. The default accommodates a cold reviewer startup. |
 | `userMessageCount` | `8` | Recent user messages included in review context, from 1 to 20. |
 | `shadow` | `false` | Evaluate and record decisions without replying to permission requests. |
@@ -153,6 +153,8 @@ With `debug: true`, diagnostics are written to `$XDG_STATE_HOME/opencode/auto-pe
 Access to this bounded diagnostics file is deterministically allowed by the plugin so troubleshooting cannot be blocked by speculative sensitivity concerns. This exception applies only to Auto Permissions' own `decisions.jsonl` path.
 
 Reviewer sessions are standalone rather than children of the active coding session. This keeps reviewer model and variant state isolated from the main agent and its displayed reasoning level.
+
+Concurrent identical requests share one model review. Once a narrow, non-sensitive session pattern is approved, later matching requests in the same root session are approved without another model call. Destructive operations, pushes, publishing, deployments, credential access, and broad wildcard patterns remain one-time decisions.
 
 The plugin does not force a universal reasoning level because variant names differ by provider. Omitting `variant` uses the selected model's variant. Avoid high or maximum reasoning for permission review unless your policy requires unusually complex analysis.
 

@@ -29,6 +29,9 @@ export function installReviewer(context: RuntimeContext, overrides: ReviewerOver
   const config = parseConfig(context.options)
   const client = overrides.client ?? new OpenCodeClientAdapter(context.client)
   const inFlight = new Map<string, AbortController>()
+  const sharedReviews = new Map<string, Promise<Decision>>()
+  const sessionApprovals = new Set<string>()
+  const sharedReviewController = new AbortController()
   const configuredProtocols: PermissionProtocol[] = overrides.protocols ?? ["stable", "v2"]
   const protocols = new Set(configuredProtocols)
   writeDiagnostic(config.diagnosticsPath, {
@@ -55,7 +58,7 @@ export function installReviewer(context: RuntimeContext, overrides: ReviewerOver
     const startedAt = performance.now()
     writeReceived(config, asked)
     inFlight.set(asked.id, controller)
-    void reviewAndReply(context, client, config, asked, controller.signal, overrides, startedAt)
+    void reviewAndReply(context, client, config, asked, controller.signal, overrides, startedAt, sharedReviews, sessionApprovals, sharedReviewController.signal)
       .catch(async (error) => {
         if (controller.signal.aborted) return
         await rejectAfterFailure(context, client, config, asked, startedAt, error, overrides)
@@ -75,7 +78,7 @@ export function installReviewer(context: RuntimeContext, overrides: ReviewerOver
     const startedAt = performance.now()
     writeReceived(config, asked)
     inFlight.set(asked.id, controller)
-    void reviewAndReply(context, client, config, asked, controller.signal, overrides, startedAt)
+    void reviewAndReply(context, client, config, asked, controller.signal, overrides, startedAt, sharedReviews, sessionApprovals, sharedReviewController.signal)
       .catch(async (error) => {
         if (controller.signal.aborted) return
         await rejectAfterFailure(context, client, config, asked, startedAt, error, overrides)
@@ -91,7 +94,10 @@ export function installReviewer(context: RuntimeContext, overrides: ReviewerOver
     offReplied()
     offStableReplied()
     for (const controller of inFlight.values()) controller.abort("plugin disposed")
+    sharedReviewController.abort("plugin disposed")
     inFlight.clear()
+    sharedReviews.clear()
+    sessionApprovals.clear()
   }
 }
 
@@ -103,17 +109,41 @@ async function reviewAndReply(
   parentSignal: AbortSignal,
   overrides: ReviewerOverrides,
   startedAt: number,
+  sharedReviews: Map<string, Promise<Decision>>,
+  sessionApprovals: Set<string>,
+  sharedReviewSignal: AbortSignal,
 ): Promise<void> {
   const input = await collectReviewInput(context, request, config.userMessageCount)
   if (parentSignal.aborted) return
 
   const policyDecision = applyDeterministicPolicy(input)
-  const decision = policyDecision ?? (await modelDecision(context, client, config, input, parentSignal))
+  const approvalKey = reusableApprovalKey(config, request, input)
+  const cachedDecision = !policyDecision && approvalKey && sessionApprovals.has(approvalKey)
+    ? {
+        kind: "allow" as const,
+        reasonCode: "session_approval_reused",
+        reason: "Reuses an approved narrow pattern from this session.",
+      }
+    : undefined
+  const reviewKey = concurrentReviewKey(request, input)
+  let shared = sharedReviews.get(reviewKey)
+  if (!policyDecision && !cachedDecision && !shared) {
+    shared = modelDecision(context, client, config, input, sharedReviewSignal)
+    sharedReviews.set(reviewKey, shared)
+    void shared.finally(() => {
+      if (sharedReviews.get(reviewKey) === shared) sharedReviews.delete(reviewKey)
+    }).catch(() => undefined)
+  }
+  const decision = policyDecision ?? cachedDecision ?? (await shared!)
   if (parentSignal.aborted) return
+
+  if (approvalKey && (decision.kind === "allow" || decision.kind === "allow_session")) {
+    sessionApprovals.add(approvalKey)
+  }
 
   overrides.onDecision?.(request, decision, config.shadow)
   if (config.shadow) {
-    writeDecision(config, request, startedAt, decision, policyDecision ? "policy" : "model")
+    writeDecision(config, request, startedAt, decision, decisionSource(policyDecision, cachedDecision))
     return
   }
 
@@ -135,7 +165,7 @@ async function reviewAndReply(
       request,
       startedAt,
       decision,
-      policyDecision ? "policy" : "model",
+      decisionSource(policyDecision, cachedDecision),
       result,
       reply === "always" ? "session" : "once",
     )
@@ -150,7 +180,7 @@ async function reviewAndReply(
     protocol: request.protocol,
   })
   context.showToast?.({ title: "Blocked", message: decision.reason, variant: "warning", duration: 4_000 })
-  writeDecision(config, request, startedAt, decision, policyDecision ? "policy" : "model", result)
+  writeDecision(config, request, startedAt, decision, decisionSource(policyDecision, cachedDecision), result)
   if (result === "replied") context.resumeAfterDenial?.(request.sessionID, decision.reason)
 }
 
@@ -200,6 +230,29 @@ function eligibleForSessionApproval(
     && !/\b(?:sudo|rm|rmdir|shred|git\s+(?:push|reset|clean|rebase)|npm\s+publish|pnpm\s+publish|yarn\s+npm\s+publish|deploy|terraform\s+apply|kubectl\s+(?:apply|delete)|curl\b[^\n|]*\|\s*(?:ba|z|k)?sh)\b/i.test(command)
 }
 
+function reusableApprovalKey(
+  config: Config,
+  request: PermissionRequest,
+  input: Awaited<ReturnType<typeof collectReviewInput>>,
+): string | undefined {
+  if (!eligibleForSessionApproval(config, request, input)) return undefined
+  return JSON.stringify([input.context.rootSessionID, request.action, request.always])
+}
+
+function concurrentReviewKey(
+  request: PermissionRequest,
+  input: Awaited<ReturnType<typeof collectReviewInput>>,
+): string {
+  return JSON.stringify([input.context.rootSessionID, request.action, request.resources, input.request.toolInput])
+}
+
+function decisionSource(
+  policyDecision: Decision | null,
+  cachedDecision: Decision | undefined,
+): "policy" | "model" | "session" {
+  return policyDecision ? "policy" : cachedDecision ? "session" : "model"
+}
+
 function isBroadPattern(pattern: string): boolean {
   const value = pattern.trim()
   return !value || value === "*" || value === "**" || /^[\\/]?(?:tmp|home|Users)[\\/][*?]+$/i.test(value)
@@ -216,7 +269,7 @@ function writeDecision(
   request: PermissionRequest,
   startedAt: number,
   decision: Decision,
-  source: "policy" | "model",
+  source: "policy" | "model" | "session",
   replyResult?: "replied" | "not_found" | "manual",
   approvalScope?: "once" | "session",
 ): void {

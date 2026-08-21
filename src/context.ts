@@ -64,15 +64,18 @@ export async function collectReviewInput(
     request.sessionID === rootSessionID ? Promise.resolve() : context.data.session.message.sync(request.sessionID),
   ])
 
-  const messages = context.data.session.message.list(rootSessionID)
-  const userMessages = messages
+  const rootMessages = context.data.session.message.list(rootSessionID)
+  const sessionMessages = request.sessionID === rootSessionID
+    ? []
+    : context.data.session.message.list(request.sessionID)
+  const userMessages = [...rootMessages, ...sessionMessages]
     .flatMap((message) => {
       const text = userText(message)
       return text === undefined ? [] : [text.slice(0, MAX_MESSAGE_CHARS)]
     })
     .slice(-userMessageCount)
   const currentDirectory = directory(context)
-  const model = latestUserModel(messages)
+  const model = latestUserModel(sessionMessages) ?? latestUserModel(rootMessages)
 
   return {
     request: {

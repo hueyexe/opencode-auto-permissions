@@ -474,13 +474,14 @@ async function collectReviewInput(context, request, userMessageCount) {
     context.data.session.message.sync(rootSessionID),
     request.sessionID === rootSessionID ? Promise.resolve() : context.data.session.message.sync(request.sessionID)
   ]);
-  const messages = context.data.session.message.list(rootSessionID);
-  const userMessages = messages.flatMap((message) => {
+  const rootMessages = context.data.session.message.list(rootSessionID);
+  const sessionMessages = request.sessionID === rootSessionID ? [] : context.data.session.message.list(request.sessionID);
+  const userMessages = [...rootMessages, ...sessionMessages].flatMap((message) => {
     const text = userText(message);
     return text === undefined ? [] : [text.slice(0, MAX_MESSAGE_CHARS)];
   }).slice(-userMessageCount);
   const currentDirectory = directory(context);
-  const model = latestUserModel(messages);
+  const model = latestUserModel(sessionMessages) ?? latestUserModel(rootMessages);
   return {
     request: {
       action: request.action,
@@ -689,6 +690,9 @@ function installReviewer(context, overrides = {}) {
   const config = parseConfig(context.options);
   const client = overrides.client ?? new OpenCodeClientAdapter(context.client);
   const inFlight = new Map;
+  const sharedReviews = new Map;
+  const sessionApprovals = new Set;
+  const sharedReviewController = new AbortController;
   const configuredProtocols = overrides.protocols ?? ["stable", "v2"];
   const protocols = new Set(configuredProtocols);
   writeDiagnostic(config.diagnosticsPath, {
@@ -716,7 +720,7 @@ function installReviewer(context, overrides = {}) {
     const startedAt = performance.now();
     writeReceived(config, asked);
     inFlight.set(asked.id, controller);
-    reviewAndReply(context, client, config, asked, controller.signal, overrides, startedAt).catch(async (error) => {
+    reviewAndReply(context, client, config, asked, controller.signal, overrides, startedAt, sharedReviews, sessionApprovals, sharedReviewController.signal).catch(async (error) => {
       if (controller.signal.aborted)
         return;
       await rejectAfterFailure(context, client, config, asked, startedAt, error, overrides);
@@ -734,7 +738,7 @@ function installReviewer(context, overrides = {}) {
     const startedAt = performance.now();
     writeReceived(config, asked);
     inFlight.set(asked.id, controller);
-    reviewAndReply(context, client, config, asked, controller.signal, overrides, startedAt).catch(async (error) => {
+    reviewAndReply(context, client, config, asked, controller.signal, overrides, startedAt, sharedReviews, sessionApprovals, sharedReviewController.signal).catch(async (error) => {
       if (controller.signal.aborted)
         return;
       await rejectAfterFailure(context, client, config, asked, startedAt, error, overrides);
@@ -750,20 +754,44 @@ function installReviewer(context, overrides = {}) {
     offStableReplied();
     for (const controller of inFlight.values())
       controller.abort("plugin disposed");
+    sharedReviewController.abort("plugin disposed");
     inFlight.clear();
+    sharedReviews.clear();
+    sessionApprovals.clear();
   };
 }
-async function reviewAndReply(context, client, config, request, parentSignal, overrides, startedAt) {
+async function reviewAndReply(context, client, config, request, parentSignal, overrides, startedAt, sharedReviews, sessionApprovals, sharedReviewSignal) {
   const input = await collectReviewInput(context, request, config.userMessageCount);
   if (parentSignal.aborted)
     return;
   const policyDecision = applyDeterministicPolicy(input);
-  const decision = policyDecision ?? await modelDecision(context, client, config, input, parentSignal);
+  const approvalKey = reusableApprovalKey(config, request, input);
+  const cachedDecision = !policyDecision && approvalKey && sessionApprovals.has(approvalKey) ? {
+    kind: "allow",
+    reasonCode: "session_approval_reused",
+    reason: "Reuses an approved narrow pattern from this session."
+  } : undefined;
+  const reviewKey = concurrentReviewKey(request, input);
+  let shared = sharedReviews.get(reviewKey);
+  if (!policyDecision && !cachedDecision && !shared) {
+    shared = modelDecision(context, client, config, input, sharedReviewSignal);
+    sharedReviews.set(reviewKey, shared);
+    shared.finally(() => {
+      if (sharedReviews.get(reviewKey) === shared)
+        sharedReviews.delete(reviewKey);
+    }).catch(() => {
+      return;
+    });
+  }
+  const decision = policyDecision ?? cachedDecision ?? await shared;
   if (parentSignal.aborted)
     return;
+  if (approvalKey && (decision.kind === "allow" || decision.kind === "allow_session")) {
+    sessionApprovals.add(approvalKey);
+  }
   overrides.onDecision?.(request, decision, config.shadow);
   if (config.shadow) {
-    writeDecision(config, request, startedAt, decision, policyDecision ? "policy" : "model");
+    writeDecision(config, request, startedAt, decision, decisionSource(policyDecision, cachedDecision));
     return;
   }
   const pending = await isRequestPending(context, request);
@@ -777,7 +805,7 @@ async function reviewAndReply(context, client, config, request, parentSignal, ov
       reply,
       protocol: request.protocol
     });
-    writeDecision(config, request, startedAt, decision, policyDecision ? "policy" : "model", result2, reply === "always" ? "session" : "once");
+    writeDecision(config, request, startedAt, decision, decisionSource(policyDecision, cachedDecision), result2, reply === "always" ? "session" : "once");
     return;
   }
   const result = await client.reply({
@@ -788,7 +816,7 @@ async function reviewAndReply(context, client, config, request, parentSignal, ov
     protocol: request.protocol
   });
   context.showToast?.({ title: "Blocked", message: decision.reason, variant: "warning", duration: 4000 });
-  writeDecision(config, request, startedAt, decision, policyDecision ? "policy" : "model", result);
+  writeDecision(config, request, startedAt, decision, decisionSource(policyDecision, cachedDecision), result);
   if (result === "replied")
     context.resumeAfterDenial?.(request.sessionID, decision.reason);
 }
@@ -825,6 +853,17 @@ function eligibleForSessionApproval(config, request, input) {
   if (typeof command !== "string")
     return false;
   return !isSensitiveTarget(command) && !/\b(?:sudo|rm|rmdir|shred|git\s+(?:push|reset|clean|rebase)|npm\s+publish|pnpm\s+publish|yarn\s+npm\s+publish|deploy|terraform\s+apply|kubectl\s+(?:apply|delete)|curl\b[^\n|]*\|\s*(?:ba|z|k)?sh)\b/i.test(command);
+}
+function reusableApprovalKey(config, request, input) {
+  if (!eligibleForSessionApproval(config, request, input))
+    return;
+  return JSON.stringify([input.context.rootSessionID, request.action, request.always]);
+}
+function concurrentReviewKey(request, input) {
+  return JSON.stringify([input.context.rootSessionID, request.action, request.resources, input.request.toolInput]);
+}
+function decisionSource(policyDecision, cachedDecision) {
+  return policyDecision ? "policy" : cachedDecision ? "session" : "model";
 }
 function isBroadPattern(pattern) {
   const value = pattern.trim();

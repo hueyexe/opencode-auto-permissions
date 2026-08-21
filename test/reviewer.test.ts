@@ -107,9 +107,9 @@ function harness(options: Record<string, unknown> = { model: "cloudflare-workers
   return { context, client, requests, replies, toasts, resumptions, emit }
 }
 
-function request(command: string, protocol: PermissionRequest["protocol"] = "v2"): PermissionRequest {
+function request(command: string, protocol: PermissionRequest["protocol"] = "v2", id = "per_1"): PermissionRequest {
   return {
-    id: "per_1",
+    id,
     sessionID: "ses_root",
     action: "shell",
     resources: [command],
@@ -202,6 +202,57 @@ describe("installReviewer", () => {
     expect(app.replies).toEqual([
       { sessionID: "ses_root", requestID: "per_1", reply: "always", protocol: "v2" },
     ])
+    dispose()
+  })
+
+  test("reuses an approved narrow pattern without another model call", async () => {
+    const app = harness()
+    let reviews = 0
+    app.client.generate = async () => {
+      reviews++
+      return { decision: "allow", reasonCode: "approved_fetch", reason: "The fetch is approved." }
+    }
+    const first = request("git fetch origin", "v2", "per_1")
+    first.always = ["git fetch origin*"]
+    app.requests.push(first)
+    const dispose = installReviewer(app.context, { client: app.client })
+
+    app.emit("permission.v2.asked", first)
+    await settle()
+    const second = request("git fetch origin main", "v2", "per_2")
+    second.always = ["git fetch origin*"]
+    app.requests.push(second)
+    app.emit("permission.v2.asked", second)
+    await settle()
+
+    expect(reviews).toBe(1)
+    expect(app.replies.map((reply) => reply.requestID)).toEqual(["per_1", "per_2"])
+    dispose()
+  })
+
+  test("coalesces concurrent identical requests into one model review", async () => {
+    const app = harness()
+    let reviews = 0
+    let release!: () => void
+    app.client.generate = async () => {
+      reviews++
+      await new Promise<void>((resolve) => { release = resolve })
+      return { decision: "allow", reasonCode: "approved_push", reason: "The push is approved." }
+    }
+    const first = request("git push origin main", "v2", "per_1")
+    const second = request("git push origin main", "v2", "per_2")
+    app.requests.push(first, second)
+    const dispose = installReviewer(app.context, { client: app.client })
+
+    app.emit("permission.v2.asked", first)
+    app.emit("permission.v2.asked", second)
+    for (let attempt = 0; attempt < 20 && !release; attempt++) await Promise.resolve()
+    release()
+    await settle()
+
+    expect(reviews).toBe(1)
+    expect(app.replies.map((reply) => reply.requestID).sort()).toEqual(["per_1", "per_2"])
+    expect(app.replies.every((reply) => reply.reply === "once")).toBeTrue()
     dispose()
   })
 
