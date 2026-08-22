@@ -21849,9 +21849,9 @@ var serverPlugin = {
 var server_default = serverPlugin;
 
 // src/v1-server.ts
+var { tui: _tuiCapability, ...dualPlugin } = server_default;
 var v1Plugin = {
-  id: "opencode.auto-permissions.server",
-  server: legacyPlugin
+  ...dualPlugin
 };
 var v1_server_default = v1Plugin;
 export {

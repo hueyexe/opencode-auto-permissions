@@ -1,6 +1,6 @@
 {
   "name": "opencode-auto-permissions",
-  "version": "0.2.9",
+  "version": "0.2.10",
   "description": "Automatic, context-aware permission review for OpenCode",
   "type": "module",
   "license": "MIT",

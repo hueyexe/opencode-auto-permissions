@@ -32,6 +32,7 @@ describe("built package", () => {
     const v1Server = await import(resolve(dist, "v1-server.js") + `?test=${Date.now()}`)
     expect(v1Server.default).toMatchObject({ id: "opencode.auto-permissions.server" })
     expect(typeof v1Server.default.server).toBe("function")
+    expect(typeof v1Server.default.setup).toBe("function")
     expect(v1Server.default.tui).toBeUndefined()
   })
 })
