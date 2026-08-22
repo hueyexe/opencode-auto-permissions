@@ -100,4 +100,5 @@ const serverPlugin = {
   server: legacyPlugin,
 } as typeof v2Plugin & PluginModule
 
+export { legacyPlugin }
 export default serverPlugin

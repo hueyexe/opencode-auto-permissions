@@ -9,7 +9,7 @@ describe("built package", () => {
     expect(Reflect.has(packageJson, "private")).toBeFalse()
     expect(packageJson.publishConfig).toEqual({ access: "public" })
     expect(packageJson.exports).toMatchObject({
-      "./server": "./dist/server.js",
+      "./server": "./dist/v1-server.js",
       "./tui": "./dist/tui.js",
     })
   })
@@ -28,5 +28,10 @@ describe("built package", () => {
     expect(server.default).toMatchObject({ id: "opencode.auto-permissions.server" })
     expect(typeof server.default.setup).toBe("function")
     expect(typeof server.default.server).toBe("function")
+
+    const v1Server = await import(resolve(dist, "v1-server.js") + `?test=${Date.now()}`)
+    expect(v1Server.default).toMatchObject({ id: "opencode.auto-permissions.server" })
+    expect(typeof v1Server.default.server).toBe("function")
+    expect(v1Server.default.tui).toBeUndefined()
   })
 })

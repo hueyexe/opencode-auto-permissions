@@ -1141,6 +1141,226 @@ async function modelDecision(context, client, config, input, parentSignal) {
   }
 }
 
+// src/stable.ts
+function createStableRuntime(injectedClient, options, directory2) {
+  const client = compatibleClient(injectedClient);
+  const listeners = new Map;
+  const sessions = new Map;
+  const messages = new Map;
+  const pending = new Map;
+  const resumeControllers = new Set;
+  const on = (type, handler) => {
+    const handlers = listeners.get(type) ?? new Set;
+    handlers.add(handler);
+    listeners.set(type, handlers);
+    return () => handlers.delete(handler);
+  };
+  const dispatch = (type, event) => {
+    for (const handler of listeners.get(type) ?? [])
+      handler(event);
+  };
+  const syncMessages = async (sessionID) => {
+    const result = unwrap(await client.session.messages({ path: { id: sessionID }, query: { directory: directory2, limit: 200 } }));
+    messages.set(sessionID, Array.isArray(result) ? result : []);
+  };
+  const syncPermissions = async () => {
+    const result = unwrap(await client.permission.list({ directory: directory2 }));
+    if (!Array.isArray(result))
+      return;
+    pending.clear();
+    for (const value of result) {
+      const request = normalizeAskedEvent({ type: "permission.asked", data: value });
+      if (request)
+        pending.set(request.id, request);
+    }
+  };
+  const root = async (sessionID) => {
+    const seen = new Set;
+    let current = sessionID;
+    while (!seen.has(current)) {
+      seen.add(current);
+      let session = sessions.get(current);
+      if (!session) {
+        const result = unwrap(await client.session.get({ path: { id: current }, query: { directory: directory2 } }));
+        if (!isRecord4(result) || typeof result.id !== "string")
+          return sessionID;
+        session = {
+          id: result.id,
+          ...typeof result.parentID === "string" ? { parentID: result.parentID } : {}
+        };
+        sessions.set(current, session);
+      }
+      if (!session.parentID)
+        return current;
+      current = session.parentID;
+    }
+    return sessionID;
+  };
+  const context = {
+    options,
+    client,
+    data: {
+      on,
+      session: {
+        root,
+        get: (sessionID) => sessions.get(sessionID),
+        message: {
+          list: (sessionID) => messages.get(sessionID) ?? [],
+          get: (sessionID, messageID) => (messages.get(sessionID) ?? []).find((message) => messageIDOf(message) === messageID),
+          sync: syncMessages
+        },
+        permission: {
+          list: (sessionID) => [...pending.values()].filter((request) => request.sessionID === sessionID),
+          sync: async () => syncPermissions().catch(() => {
+            return;
+          })
+        }
+      },
+      location: { default: () => ({ directory: directory2 }) }
+    },
+    location: { directory: directory2 },
+    showToast(input) {
+      if (typeof client.tui?.showToast !== "function")
+        return;
+      client.tui.showToast({ directory: directory2, ...input }).catch(() => {
+        return;
+      });
+    },
+    resumeAfterDenial(sessionID, reason) {
+      if (typeof client.session?.promptAsync !== "function")
+        return;
+      const controller = new AbortController;
+      resumeControllers.add(controller);
+      waitForIdle(client, sessionID, directory2, controller.signal).then((idle) => {
+        if (!idle || controller.signal.aborted)
+          return;
+        const routing = latestUserRouting(messages.get(sessionID) ?? []);
+        return client.session.promptAsync({
+          path: { id: sessionID },
+          query: { directory: directory2 },
+          body: {
+            ...routing,
+            parts: [{
+              type: "text",
+              text: `${AUTO_PERMISSIONS_MESSAGE_PREFIX} ${reason} Do not retry the exact blocked action. Continue the task using a safer alternative when possible; ask the user only if no useful safe path remains.`
+            }]
+          }
+        });
+      }).catch(() => {
+        return;
+      }).finally(() => resumeControllers.delete(controller));
+    }
+  };
+  return {
+    context,
+    async version() {
+      if (typeof client.global?.health !== "function")
+        return;
+      const result = unwrap(await client.global.health());
+      return isRecord4(result) && typeof result.version === "string" ? result.version : undefined;
+    },
+    emit(event) {
+      const asked = normalizeAskedEvent(event);
+      if (asked?.protocol === "stable") {
+        pending.set(asked.id, asked);
+        dispatch("permission.asked", event);
+        return;
+      }
+      const replied = normalizeRepliedEvent(event);
+      if (replied) {
+        pending.delete(replied.requestID);
+        dispatch("permission.replied", event);
+      }
+    },
+    dispose() {
+      listeners.clear();
+      sessions.clear();
+      messages.clear();
+      pending.clear();
+      for (const controller of resumeControllers)
+        controller.abort();
+      resumeControllers.clear();
+    }
+  };
+}
+function latestUserRouting(messages) {
+  for (let index = messages.length - 1;index >= 0; index--) {
+    const message = messages[index];
+    if (!isRecord4(message))
+      continue;
+    const info = isRecord4(message.info) ? message.info : message;
+    if (info.role !== "user")
+      continue;
+    const agent = typeof info.agent === "string" ? info.agent : undefined;
+    const modelValue = isRecord4(info.model) ? info.model : undefined;
+    const providerID = modelValue?.providerID;
+    const modelID = modelValue?.modelID ?? modelValue?.id;
+    const model = typeof providerID === "string" && typeof modelID === "string" ? { providerID, modelID } : undefined;
+    const variant = typeof modelValue?.variant === "string" ? modelValue.variant : undefined;
+    return {
+      ...agent ? { agent } : {},
+      ...model ? { model } : {},
+      ...variant ? { variant } : {}
+    };
+  }
+  return {};
+}
+async function waitForIdle(client, sessionID, directory2, signal) {
+  if (typeof client.session?.status !== "function") {
+    await delay(250, signal);
+    return !signal.aborted;
+  }
+  for (let attempt = 0;attempt < 50 && !signal.aborted; attempt++) {
+    const statuses = unwrap(await client.session.status({ query: { directory: directory2 } }));
+    if (!isRecord4(statuses) || !isRecord4(statuses[sessionID]) || statuses[sessionID].type === "idle")
+      return true;
+    await delay(100, signal);
+  }
+  return false;
+}
+function delay(milliseconds, signal) {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, milliseconds);
+    signal.addEventListener("abort", () => {
+      clearTimeout(timer);
+      resolve();
+    }, { once: true });
+  });
+}
+function protocolForVersion(version) {
+  if (!version)
+    return;
+  if (version.startsWith("0.0.0-beta") || version.startsWith("0.0.0-next"))
+    return "v2";
+  const major = Number.parseInt(version.split(".", 1)[0] ?? "", 10);
+  if (!Number.isFinite(major))
+    return;
+  return major >= 2 ? "v2" : "stable";
+}
+function compatibleClient(value) {
+  if (isRecord4(value))
+    return value;
+  throw new Error("OpenCode compatible authenticated client is unavailable");
+}
+function unwrap(result) {
+  if (result?.error)
+    throw result.error;
+  let value = result?.data ?? result;
+  if (isRecord4(value) && "data" in value)
+    value = value.data;
+  return value;
+}
+function messageIDOf(value) {
+  if (!isRecord4(value))
+    return;
+  if (typeof value.id === "string")
+    return value.id;
+  return isRecord4(value.info) && typeof value.info.id === "string" ? value.info.id : undefined;
+}
+function isRecord4(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 // src/tui.ts
 var id = "opencode.auto-permissions";
 var plugin = exports_plugin.define({
@@ -1149,8 +1369,13 @@ var plugin = exports_plugin.define({
     return installReviewer(fromContext(context), { protocols: ["v2"] });
   }
 });
-var tui = plugin.setup;
-var tui_default = plugin;
+var tui = async (api, options) => {
+  if (await isStableRuntime(api.client))
+    return;
+  const dispose = installReviewer(fromLegacyApi(api, options ?? {}), { protocols: ["v2"] });
+  api.lifecycle.onDispose(dispose);
+};
+var tui_default = { ...plugin, tui };
 function fromContext(context) {
   return {
     options: context.options,
@@ -1160,6 +1385,60 @@ function fromContext(context) {
     showToast(input) {
       context.ui.toast.show(input);
     }
+  };
+}
+async function isStableRuntime(client) {
+  if (typeof client?.global?.health !== "function")
+    return false;
+  try {
+    const result = await client.global.health();
+    const value = result?.data ?? result;
+    return protocolForVersion(value?.version) === "stable";
+  } catch {
+    return false;
+  }
+}
+function fromLegacyApi(api, options) {
+  return {
+    options,
+    client: api.client,
+    data: {
+      on(type, handler) {
+        return api.event.on(type, handler);
+      },
+      session: {
+        root(sessionID) {
+          const seen = new Set;
+          let current = sessionID;
+          while (!seen.has(current)) {
+            seen.add(current);
+            const parentID = api.state.session.get(current)?.parentID;
+            if (!parentID)
+              return current;
+            current = parentID;
+          }
+          return sessionID;
+        },
+        get: (sessionID) => api.state.session.get(sessionID),
+        message: {
+          list: (sessionID) => api.state.session.messages(sessionID).map((info) => ({ info, parts: api.state.part(info.id) })),
+          get: (sessionID, messageID) => {
+            const info = api.state.session.messages(sessionID).find((message) => message.id === messageID);
+            return info ? { info, parts: api.state.part(info.id) } : undefined;
+          },
+          sync: async () => {}
+        },
+        permission: {
+          list: (sessionID) => api.state.session.permission(sessionID),
+          sync: async () => {}
+        }
+      },
+      location: {
+        default: () => ({ directory: api.state.path.directory })
+      }
+    },
+    location: { directory: api.state.path.directory },
+    showToast: api.ui.toast
   };
 }
 export {

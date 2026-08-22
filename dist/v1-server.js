@@ -21847,7 +21847,13 @@ var serverPlugin = {
   server: legacyPlugin
 };
 var server_default = serverPlugin;
+
+// src/v1-server.ts
+var v1Plugin = {
+  id: "opencode.auto-permissions.server",
+  server: legacyPlugin
+};
+var v1_server_default = v1Plugin;
 export {
-  legacyPlugin,
-  server_default as default
+  v1_server_default as default
 };

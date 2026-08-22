@@ -1,6 +1,6 @@
 {
   "name": "opencode-auto-permissions",
-  "version": "0.2.8",
+  "version": "0.2.9",
   "description": "Automatic, context-aware permission review for OpenCode",
   "type": "module",
   "license": "MIT",
@@ -18,7 +18,7 @@
   "main": "./dist/server.js",
   "exports": {
     ".": "./dist/server.js",
-    "./server": "./dist/server.js",
+    "./server": "./dist/v1-server.js",
     "./tui": "./dist/tui.js"
   },
   "files": [
@@ -27,7 +27,7 @@
     "README.md"
   ],
   "scripts": {
-    "build": "rm -rf dist && bun build src/server.ts src/tui.ts --outdir dist --target bun --format esm",
+    "build": "rm -rf dist && bun build src/server.ts src/tui.ts src/v1-server.ts --outdir dist --target bun --format esm",
     "check": "tsc --noEmit",
     "test": "bun test",
     "test:coverage": "bun test --coverage",
