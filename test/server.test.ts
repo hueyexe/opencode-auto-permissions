@@ -56,6 +56,47 @@ describe("server plugin", () => {
     })
   })
 
+  test("reviews V2 permissions statelessly on the server", async () => {
+    let evaluate: ((event: any) => Promise<void>) | undefined
+    let generated = false
+    const context: any = {
+      options: { model: "openai/gpt-5.6-luna", variant: "none" },
+      location: { directory: "/repo" },
+      agent: { transform: async () => {} },
+      permission: {
+        hook: async (_name: string, callback: (event: any) => Promise<void>) => {
+          evaluate = callback
+          return { dispose: async () => {} }
+        },
+      },
+      session: {
+        context: async () => [{ type: "user", text: "Delete the named empty test directory." }],
+        get: async () => ({ model: { providerID: "openai", id: "gpt-5.6-luna", variant: "none" } }),
+      },
+      generate: {
+        text: async ({ prompt }: { prompt: string }) => {
+          generated = true
+          expect(prompt).toContain(REVIEWER_SYSTEM_PROMPT)
+          return { text: '{"decision":"allow","reasonCode":"authorized","reason":"The user authorized it."}' }
+        },
+      },
+    }
+
+    await server.setup(context)
+    const event = {
+      sessionID: "ses_main",
+      action: "shell",
+      resources: ["rm -rf /repo/generated"],
+      metadata: { input: { command: "rm -rf /repo/generated" } },
+      effect: "ask",
+    }
+    await evaluate?.(event)
+
+    expect(generated).toBeTrue()
+    expect(event.effect).toBe("allow")
+    expect(event).toHaveProperty("message", "The user authorized it.")
+  })
+
   test("strips ambient context only for the hidden reviewer request", async () => {
     const hooks = await server.server(pluginInput(), { model: "cloudflare-workers-ai/@cf/deepseek-ai/deepseek-v4-flash-0731" })
     const reviewerSystem = ["large global prompt", "skills", "mcp"]

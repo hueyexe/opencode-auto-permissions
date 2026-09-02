@@ -2,22 +2,14 @@ import { describe, expect, test } from "bun:test"
 import { OpenCodeClientAdapter } from "../src/opencode-client.ts"
 
 describe("OpenCodeClientAdapter", () => {
-  test("uses the current V2 session and permission APIs", async () => {
+  test("uses stateless generation with the current V2 permission API", async () => {
     const calls: Array<{ method: string; input: any }> = []
     const adapter = new OpenCodeClientAdapter({
-      agent: { list: async () => [] },
-      skill: { list: async () => [] },
-      session: {
-        create: async (input: any) => {
-          calls.push({ method: "create", input })
-          return { id: "ses_review" }
-        },
-        generate: async (input: any) => {
+      generate: {
+        text: async (input: any) => {
           calls.push({ method: "generate", input })
-          return { text: '{"decision":"allow","reasonCode":"safe","reason":"Safe operation."}' }
+          return { data: { text: '{"decision":"allow","reasonCode":"safe","reason":"Safe operation."}' } }
         },
-        remove: async (input: any) => calls.push({ method: "remove", input }),
-        interrupt: async () => {},
       },
       permission: {
         request: { list: async () => ({ data: [] }) },
@@ -39,12 +31,25 @@ describe("OpenCodeClientAdapter", () => {
       protocol: "v2",
     })).resolves.toBe("replied")
 
-    expect(calls.map((call) => call.method)).toEqual(["create", "generate", "remove", "reply"])
+    expect(calls.map((call) => call.method)).toEqual(["generate", "reply"])
     expect(calls[0]?.input).toMatchObject({
-      agent: "auto-permissions-reviewer",
       model: { providerID: "example", id: "luna-5.6" },
     })
-    expect(calls[3]?.input).toEqual({ sessionID: "ses_parent", requestID: "per_1", reply: "once" })
+    expect(calls[0]?.input.prompt).toContain("Default to ALLOW")
+    expect(calls[0]?.input.prompt).toContain("Return only one JSON object")
+    expect(calls[1]?.input).toEqual({ sessionID: "ses_parent", requestID: "per_1", reply: "once" })
+  })
+
+  test("does not prewarm a client-side location when stateless generation is available", async () => {
+    let listed = false
+    const client = new OpenCodeClientAdapter({
+      generate: { text: async () => ({ data: { text: "{}" } }) },
+      agent: { list: async () => { listed = true } },
+    })
+
+    await client.prewarm()
+
+    expect(listed).toBeFalse()
   })
 
   test("prewarms the reviewer location without invoking a model", async () => {

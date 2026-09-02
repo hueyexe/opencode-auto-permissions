@@ -21,12 +21,12 @@ opencode plugin -g opencode-auto-permissions
 
 That is the complete plugin installation. You do not need to clone this repository, install Bun, run `npm install`, choose a reviewer model, or edit plugin entries manually.
 
-OpenCode downloads the package, detects its separate server and TUI targets, and adds `opencode-auto-permissions` to:
+OpenCode downloads the package and adds `opencode-auto-permissions` to:
 
 - `~/.config/opencode/opencode.json` for the server integration.
-- `~/.config/opencode/cli.json` for the V2 TUI integration.
+- `~/.config/opencode/cli.json` only when a transitional runtime needs the TUI fallback.
 
-Quit and restart OpenCode after installation because configuration is loaded at startup. Auto Permissions automatically uses the model and variant selected by the session that requested the action. It also detects whether the server or TUI integration owns permission review, so only one reviewer handles each request.
+Quit and restart OpenCode after installation because configuration is loaded at startup. Auto Permissions automatically uses the model and variant selected by the session that requested the action. Current V2 reviews permissions on the server so local, remote, web, and multiple simultaneous clients share one reviewer.
 
 ## Configure Permissions
 
@@ -86,13 +86,13 @@ For each supported permission request, Auto Permissions combines deterministic s
 - Broad boundary globs such as `/tmp/*` are not treated as the requested scope when the tool input identifies a precise target; the reviewer evaluates the actual operation and latest user request.
 - The reviewer is tuned for unattended agents: it defaults to approval when an action reasonably serves the task and uses `ask` only as a last resort.
 - Reviewer failures and timeouts fail closed: the request is rejected automatically and the main agent receives guidance to continue with a narrower or lower-risk step.
-- Reviewer sessions are hidden, have no tools, and deny all permissions.
+- Current V2 uses stateless generation, so reviews do not create sessions or appear in session history. Older runtimes use hidden reviewer sessions with no tools and deny-all permissions.
 - Only a small, recent window of relevant user context is sent for review.
 - Plugin-authored denial continuations are excluded from that context so an earlier verdict cannot become a self-reinforcing human instruction.
 
 The reviewer never receives authority to execute the requested action. It always resolves the request by approving once, approving narrow matching requests for the current session, or rejecting with an actionable reason. Session approvals are held in memory by OpenCode and do not persist to later sessions.
 
-Reviewer sessions are standalone and deleted after each decision or failure. Startup never deletes reviewer sessions because multiple OpenCode processes may be reviewing permissions concurrently; one process must not delete another process's active review.
+On older runtimes, reviewer sessions are standalone and deleted after each decision or failure. Startup never deletes reviewer sessions because multiple OpenCode processes may be reviewing permissions concurrently; one process must not delete another process's active review.
 
 Auto Permissions never asks the user to resolve a permission prompt. When the reviewer cannot safely approve, it denies and tells the coding agent why, what safer alternative to try, and to continue autonomously where possible.
 
@@ -152,7 +152,7 @@ With `debug: true`, diagnostics are written to `$XDG_STATE_HOME/opencode/auto-pe
 
 Access to this bounded diagnostics file is deterministically allowed by the plugin so troubleshooting cannot be blocked by speculative sensitivity concerns. This exception applies only to Auto Permissions' own `decisions.jsonl` path.
 
-Reviewer sessions are standalone rather than children of the active coding session. This keeps reviewer model and variant state isolated from the main agent and its displayed reasoning level.
+Stateless V2 reviews and standalone fallback sessions keep reviewer model and variant state isolated from the main agent and its displayed reasoning level.
 
 Concurrent identical requests share one model review. Once a narrow, non-sensitive session pattern is approved, later matching requests in the same root session are approved without another model call. Destructive operations, pushes, publishing, deployments, credential access, and broad wildcard patterns remain one-time decisions.
 

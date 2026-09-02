@@ -1,5 +1,5 @@
 import type { ReviewModel, ReviewerClient } from "./types.ts"
-import { DECISION_SCHEMA, REVIEWER_AGENT_ID } from "./agent.ts"
+import { DECISION_SCHEMA, REVIEWER_AGENT_ID, REVIEWER_SYSTEM_PROMPT } from "./agent.ts"
 import { mkdir } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -15,6 +15,7 @@ export class OpenCodeClientAdapter implements ReviewerClient {
   constructor(private readonly client: any) {}
 
   async prewarm(): Promise<void> {
+    if (typeof this.client.generate?.text === "function") return
     await mkdir(REVIEWER_DIRECTORY, { recursive: true })
     const location = { directory: REVIEWER_DIRECTORY }
     const requests: Promise<unknown>[] = []
@@ -39,7 +40,8 @@ export class OpenCodeClientAdapter implements ReviewerClient {
     location?: { directory?: string; workspaceID?: string }
     signal: AbortSignal
   }): Promise<unknown> {
-    if (typeof this.client.permission?.request?.list === "function") return this.generateCurrent(input)
+    if (typeof this.client.generate?.text === "function") return this.generateStateless(input)
+    if (typeof this.client.permission?.request?.list === "function") return this.generateCurrentSession(input)
     const stable = typeof this.client.postSessionIdPermissionsPermissionId === "function"
     const session = stable ? this.client.session : (this.client.v2?.session ?? this.client.session)
     if (!session || typeof session.create !== "function" || typeof session.prompt !== "function") {
@@ -175,7 +177,24 @@ export class OpenCodeClientAdapter implements ReviewerClient {
     }
   }
 
-  private async generateCurrent(input: {
+  private async generateStateless(input: {
+    prompt: string
+    model: ReviewModel
+    signal: AbortSignal
+  }): Promise<unknown> {
+    if (input.signal.aborted) throw abortError(input.signal.reason)
+    const strictPrompt = `${REVIEWER_SYSTEM_PROMPT}\n\n${input.prompt}\n\nReturn only one JSON object without Markdown fences with exactly these keys: "decision" ("allow", "allow_session", or "deny"), "reasonCode" (lower_snake_case), and "reason" (one sentence).`
+    const result = unwrapData(await this.client.generate.text({
+      prompt: strictPrompt,
+      model: input.model,
+    }, { signal: input.signal }))
+    if (!isRecord(result) || typeof result.text !== "string") {
+      throw new Error("OpenCode reviewer returned no text output")
+    }
+    return JSON.parse(result.text)
+  }
+
+  private async generateCurrentSession(input: {
     prompt: string
     model: ReviewModel
     signal: AbortSignal

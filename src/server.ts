@@ -2,8 +2,13 @@ import { Plugin as V2Plugin } from "@opencode-ai/plugin"
 import type { Config, Plugin, PluginModule } from "@opencode-ai/plugin/v1"
 import { REVIEWER_AGENT_ID, REVIEWER_SYSTEM_PROMPT } from "./agent.ts"
 import { parseConfig } from "./config.ts"
+import { failureCategory, writeDiagnostic } from "./diagnostics.ts"
+import { applyDeterministicPolicy } from "./policy.ts"
+import { buildReviewPrompt } from "./prompt.ts"
 import { installReviewer } from "./reviewer.ts"
 import { createStableRuntime, protocolForVersion } from "./stable.ts"
+import type { Decision, ReviewInput } from "./types.ts"
+import { parseDecision } from "./verdict.ts"
 
 const v2Plugin = V2Plugin.define({
   id: "opencode.auto-permissions.server",
@@ -21,6 +26,92 @@ const v2Plugin = V2Plugin.define({
         agent.permissions = [{ action: "*", resource: "*", effect: "deny" }]
       })
     })
+    const current = context as any
+    const permission = Reflect.get(current, "permission")
+    if (typeof permission?.hook !== "function") return
+    writeDiagnostic(config.diagnosticsPath, {
+      timestamp: new Date().toISOString(),
+      event: "plugin_started",
+    })
+    const registration = await permission.hook("evaluate", async (event: any) => {
+      if (event.effect !== "ask") return
+      const started = Date.now()
+      writeDiagnostic(config.diagnosticsPath, {
+        timestamp: new Date().toISOString(),
+        event: "request_received",
+        sessionID: event.sessionID,
+        protocol: "v2",
+        action: event.action,
+        resourceCount: event.resources.length,
+      })
+      try {
+        const [messages, session] = await Promise.all([
+          current.session.context({ sessionID: event.sessionID }),
+          current.session.get({ sessionID: event.sessionID }),
+        ])
+        const input: ReviewInput = {
+          request: {
+            action: event.action,
+            resources: [...event.resources],
+            sessionPatterns: [],
+            ...(event.metadata ? { toolInput: event.metadata.input ?? event.metadata } : {}),
+          },
+          context: {
+            rootSessionID: event.sessionID,
+            ...(current.location?.directory ? { directory: current.location.directory } : {}),
+            userMessages: messages
+              .filter((message: any) => message?.type === "user" && typeof message.text === "string")
+              .slice(-config.userMessageCount)
+              .map((message: any) => message.text),
+            ...(config.model ?? session.model ? { model: config.model ?? session.model } : {}),
+          },
+        }
+        let source: "policy" | "model" = "policy"
+        let decision: Decision | null = applyDeterministicPolicy(input)
+        if (!decision) {
+          source = "model"
+          const model = config.model ?? session.model
+          if (!model) throw new Error("Auto Permissions could not determine the requesting session model")
+          const prompt = `${REVIEWER_SYSTEM_PROMPT}\n\n${buildReviewPrompt(input)}\n\nReturn only one JSON object without Markdown fences with exactly these keys: "decision" ("allow", "allow_session", or "deny"), "reasonCode" (lower_snake_case), and "reason" (one sentence).`
+          const result = await current.generate.text({ model, prompt })
+          decision = parseDecision(JSON.parse(result.text))
+        }
+        if (!decision) throw new Error("Auto Permissions returned no decision")
+        writeDiagnostic(config.diagnosticsPath, {
+          timestamp: new Date().toISOString(),
+          event: "decision",
+          sessionID: event.sessionID,
+          protocol: "v2",
+          action: event.action,
+          resourceCount: event.resources.length,
+          elapsedMs: Date.now() - started,
+          source,
+          decision: decision.kind,
+          reasonCode: decision.reasonCode,
+          reason: decision.reason,
+          shadow: config.shadow,
+          replyResult: config.shadow ? "manual" : "replied",
+          ...(decision.kind === "allow_session" ? { approvalScope: "once" } : {}),
+        })
+        if (config.shadow) return
+        event.effect = decision.kind === "deny" ? "deny" : "allow"
+        event.message = decision.reason
+      } catch (error) {
+        writeDiagnostic(config.diagnosticsPath, {
+          timestamp: new Date().toISOString(),
+          event: "failure",
+          sessionID: event.sessionID,
+          protocol: "v2",
+          action: event.action,
+          resourceCount: event.resources.length,
+          elapsedMs: Date.now() - started,
+          failureCategory: failureCategory(error),
+        })
+        event.effect = "deny"
+        event.message = "Automatic permission review failed; continue with a narrower or lower-risk action."
+      }
+    })
+    return () => registration.dispose()
   },
 })
 
