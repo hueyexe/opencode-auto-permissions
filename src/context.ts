@@ -2,6 +2,19 @@ import type { PermissionRequest, ReviewInput, ReviewModel, RuntimeContext } from
 
 const MAX_MESSAGE_CHARS = 4_000
 export const AUTO_PERMISSIONS_MESSAGE_PREFIX = "[Auto Permissions] The requested action was blocked:"
+export const SERVER_PLUGIN_ID = "opencode.auto-permissions.server"
+
+export function denialContinuation(reason: string): string {
+  return `${AUTO_PERMISSIONS_MESSAGE_PREFIX} ${reason} Do not retry the exact blocked action. Continue the task using a safer alternative when possible; ask the user only if no useful safe path remains.`
+}
+
+export function sameLocation(
+  left: { directory?: string; workspaceID?: string } | undefined,
+  right: { directory?: string; workspaceID?: string } | undefined,
+): boolean {
+  if (!left?.directory || !right?.directory) return true
+  return left.directory === right.directory && (left.workspaceID ?? undefined) === (right.workspaceID ?? undefined)
+}
 
 export function normalizeAskedEvent(event: unknown): PermissionRequest | null {
   if (!isRecord(event)) return null
