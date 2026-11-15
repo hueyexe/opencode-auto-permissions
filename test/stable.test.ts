@@ -77,17 +77,17 @@ describe("createStableRuntime", () => {
     runtime.dispose()
   })
 
-  test("resumes the session with safe continuation guidance after a denial", async () => {
+  test("resumes a root session with safe continuation guidance after a denial", async () => {
     const injected = client()
     const runtime = createStableRuntime(injected, { model: "cloudflare-workers-ai/@cf/deepseek-ai/deepseek-v4-flash-0731" }, "/repo")
-    await runtime.context.data.session.message.sync("ses_child")
+    await runtime.context.data.session.message.sync("ses_root")
 
-    runtime.context.resumeAfterDenial?.("ses_child", "The user explicitly prohibited this action.")
+    runtime.context.resumeAfterDenial?.("ses_root", "The user explicitly prohibited this action.")
     await new Promise((resolve) => setTimeout(resolve, 150))
 
     expect(injected.prompts).toEqual([
       {
-        path: { id: "ses_child" },
+        path: { id: "ses_root" },
         query: { directory: "/repo" },
         body: {
           agent: "build",
@@ -100,6 +100,44 @@ describe("createStableRuntime", () => {
         },
       },
     ])
+    runtime.dispose()
+  })
+
+  test("leaves a denied subagent terminated instead of resurrecting it", async () => {
+    const injected = client()
+    const runtime = createStableRuntime(injected, { model: "cloudflare-workers-ai/@cf/deepseek-ai/deepseek-v4-flash-0731" }, "/repo")
+    await runtime.context.data.session.message.sync("ses_child")
+
+    runtime.context.resumeAfterDenial?.("ses_child", "Permission review timed out.")
+    await new Promise((resolve) => setTimeout(resolve, 150))
+
+    expect(injected.prompts).toEqual([])
+    runtime.dispose()
+  })
+
+  test("does not resume a session with unknown parentage", async () => {
+    const injected = client()
+    const runtime = createStableRuntime(injected, { model: "cloudflare-workers-ai/@cf/deepseek-ai/deepseek-v4-flash-0731" }, "/repo")
+
+    runtime.context.resumeAfterDenial?.("ses_missing", "Permission review timed out.")
+    await new Promise((resolve) => setTimeout(resolve, 150))
+
+    expect(injected.prompts).toEqual([])
+    runtime.dispose()
+  })
+
+  test("uses review-failure guidance without calling the action unsafe", async () => {
+    const injected = client()
+    const runtime = createStableRuntime(injected, { model: "cloudflare-workers-ai/@cf/deepseek-ai/deepseek-v4-flash-0731" }, "/repo")
+    await runtime.context.data.session.message.sync("ses_root")
+
+    runtime.context.resumeAfterDenial?.("ses_root", "Permission review timed out.", "review_failed")
+    await new Promise((resolve) => setTimeout(resolve, 150))
+
+    const text = String((injected.prompts[0] as any)?.body?.parts?.[0]?.text)
+    expect(text).toContain("No safety decision was reached")
+    expect(text).toContain("Retry the same action once")
+    expect(text).not.toContain("Do not retry the exact blocked action")
     runtime.dispose()
   })
 

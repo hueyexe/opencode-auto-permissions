@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import server from "../src/server.ts"
-import { REVIEWER_SYSTEM_PROMPT } from "../src/agent.ts"
+import { REVIEWER_SYSTEM_PROMPT, SERVER_REVIEW_MARKER } from "../src/agent.ts"
 import { REVIEWER_DIRECTORY } from "../src/opencode-client.ts"
 
 function pluginInput() {
@@ -52,7 +52,7 @@ describe("server plugin", () => {
       mode: "subagent",
       hidden: true,
       steps: 1,
-      tools: { "*": false },
+      tools: { "*": false, read: true },
       permission: { "*": "deny" },
     })
   })
@@ -94,8 +94,9 @@ describe("server plugin", () => {
     const replies: Array<Record<string, unknown>> = []
     const prompts: Array<Record<string, unknown>> = []
     const generatedModels: unknown[] = []
+    const descriptions: string[] = []
     const pending = [
-      { id: "per_1", sessionID: "ses_child", action: "shell", resources: ["sudo rm -rf /"], save: [] },
+      { id: "per_1", sessionID: "ses_root", action: "shell", resources: ["sudo rm -rf /"], save: [] },
     ]
     const queue: unknown[] = []
     let wake: (() => void) | undefined
@@ -111,7 +112,13 @@ describe("server plugin", () => {
       location: { directory: "/repo-a" },
       agent: {
         transform: async (fn: (draft: any) => void) => {
-          fn({ update: () => {} })
+          fn({
+            update: (_id: string, updater: (agent: any) => void) => {
+              const agent: any = {}
+              updater(agent)
+              descriptions.push(agent.description)
+            },
+          })
         },
         list: async () => [],
       },
@@ -182,20 +189,177 @@ describe("server plugin", () => {
 
       expect(replies).toHaveLength(1)
       expect(replies[0]).toMatchObject({
-        sessionID: "ses_child",
+        sessionID: "ses_root",
         requestID: "per_1",
         decision: "reject",
       })
       expect(prompts).toHaveLength(1)
       expect(prompts[0]).toMatchObject({
-        sessionID: "ses_child",
+        sessionID: "ses_root",
         delivery: "steer",
       })
       expect(generatedModels).toHaveLength(0)
+      expect(descriptions.some((description) => description.includes(SERVER_REVIEW_MARKER))).toBeTrue()
     } finally {
       await cleanup?.()
     }
     expect(subscriptionSignal?.aborted).toBeTrue()
+  })
+
+  test("leaves a denied V2 subagent terminated instead of steering it", async () => {
+    const replies: Array<Record<string, unknown>> = []
+    const prompts: Array<Record<string, unknown>> = []
+    const pending = [
+      { id: "per_child", sessionID: "ses_child", action: "shell", resources: ["sudo rm -rf /"], save: [] },
+    ]
+    const queue: unknown[] = []
+    let wake: (() => void) | undefined
+    let subscriptionSignal: AbortSignal | undefined
+
+    const context: any = {
+      options: {},
+      location: { directory: "/repo-a" },
+      agent: {
+        transform: async (fn: (draft: any) => void) => {
+          fn({ update: () => {} })
+        },
+        list: async () => [],
+      },
+      skill: { list: async () => [] },
+      event: {
+        subscribe(options?: { signal?: AbortSignal }) {
+          subscriptionSignal = options?.signal
+          return {
+            [Symbol.asyncIterator]() {
+              return {
+                async next() {
+                  while (queue.length === 0) {
+                    if (subscriptionSignal?.aborted) return { done: true, value: undefined }
+                    await new Promise<void>((resolve) => {
+                      wake = resolve
+                      subscriptionSignal?.addEventListener("abort", () => resolve(), { once: true })
+                    })
+                  }
+                  return { done: false, value: queue.shift() }
+                },
+              }
+            },
+          }
+        },
+      },
+      permission: {
+        list: async () => [...pending],
+        reply: async (input: Record<string, unknown>) => {
+          replies.push(input)
+          pending.length = 0
+        },
+      },
+      session: {
+        get: async ({ sessionID }: { sessionID: string }) =>
+          sessionID === "ses_child"
+            ? { id: "ses_child", parentID: "ses_root", location: { directory: "/repo-a" } }
+            : { id: "ses_root", location: { directory: "/repo-a" } },
+        context: async () => [],
+        create: async () => ({ id: "ses_review" }),
+        generate: async () => ({ text: '{"decision":"deny","reasonCode":"dangerous","reason":"Denied."}' }),
+        remove: async () => {},
+        interrupt: async () => {},
+        prompt: async (input: Record<string, unknown>) => {
+          prompts.push(input)
+        },
+      },
+    }
+
+    const cleanup = await server.setup(context)
+    try {
+      queue.push({ type: "permission.asked", location: { directory: "/repo-a" }, data: pending[0] })
+      wake?.()
+      await new Promise((resolve) => setTimeout(resolve, 150))
+
+      expect(replies).toHaveLength(1)
+      expect(replies[0]).toMatchObject({ sessionID: "ses_child", requestID: "per_child", decision: "reject" })
+      expect(prompts).toEqual([])
+    } finally {
+      await cleanup?.()
+    }
+  })
+
+  test("uses review-failure guidance for technical server review failures", async () => {
+    const replies: Array<Record<string, unknown>> = []
+    const prompts: Array<Record<string, unknown>> = []
+    const pending = [
+      { id: "per_fail", sessionID: "ses_root", action: "shell", resources: ["git push origin feature"], save: [] },
+    ]
+    const queue: unknown[] = []
+    let wake: (() => void) | undefined
+    let subscriptionSignal: AbortSignal | undefined
+
+    const context: any = {
+      options: {},
+      location: { directory: "/repo-a" },
+      agent: {
+        transform: async (fn: (draft: any) => void) => {
+          fn({ update: () => {} })
+        },
+        list: async () => [],
+      },
+      skill: { list: async () => [] },
+      event: {
+        subscribe(options?: { signal?: AbortSignal }) {
+          subscriptionSignal = options?.signal
+          return {
+            [Symbol.asyncIterator]() {
+              return {
+                async next() {
+                  while (queue.length === 0) {
+                    if (subscriptionSignal?.aborted) return { done: true, value: undefined }
+                    await new Promise<void>((resolve) => {
+                      wake = resolve
+                      subscriptionSignal?.addEventListener("abort", () => resolve(), { once: true })
+                    })
+                  }
+                  return { done: false, value: queue.shift() }
+                },
+              }
+            },
+          }
+        },
+      },
+      permission: {
+        list: async () => [...pending],
+        reply: async (input: Record<string, unknown>) => {
+          replies.push(input)
+          pending.length = 0
+        },
+      },
+      session: {
+        get: async () => ({ id: "ses_root", location: { directory: "/repo-a" } }),
+        context: async () => [],
+        create: async () => ({ id: "ses_review" }),
+        generate: async () => ({ text: '{"decision":"allow","reasonCode":"ok","reason":"Allowed."}' }),
+        remove: async () => {},
+        interrupt: async () => {},
+        prompt: async (input: Record<string, unknown>) => {
+          prompts.push(input)
+        },
+      },
+    }
+
+    const cleanup = await server.setup(context)
+    try {
+      queue.push({ type: "permission.asked", location: { directory: "/repo-a" }, data: pending[0] })
+      wake?.()
+      await new Promise((resolve) => setTimeout(resolve, 150))
+
+      expect(replies).toHaveLength(1)
+      expect(replies[0]).toMatchObject({ sessionID: "ses_root", requestID: "per_fail", decision: "reject" })
+      expect(prompts).toHaveLength(1)
+      const text = String(prompts[0]?.text)
+      expect(text).toContain("No safety decision was reached")
+      expect(text).not.toContain("Do not retry the exact blocked action")
+    } finally {
+      await cleanup?.()
+    }
   })
 
   test("uses configured model and variant on V2 server reviews", async () => {

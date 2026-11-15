@@ -1,11 +1,17 @@
-import type { PermissionRequest, ReviewInput, ReviewModel, RuntimeContext } from "./types.ts"
+import type { DenialKind, PermissionRequest, ReviewInput, ReviewModel, RuntimeContext } from "./types.ts"
 
 const MAX_MESSAGE_CHARS = 4_000
 export const AUTO_PERMISSIONS_MESSAGE_PREFIX = "[Auto Permissions] The requested action was blocked:"
 export const SERVER_PLUGIN_ID = "opencode.auto-permissions.server"
 
-export function denialContinuation(reason: string): string {
-  return `${AUTO_PERMISSIONS_MESSAGE_PREFIX} ${reason} Do not retry the exact blocked action. Continue the task using a safer alternative when possible; ask the user only if no useful safe path remains.`
+export function denialContinuation(reason: string, kind: DenialKind = "denied"): string {
+  const prefix = `${AUTO_PERMISSIONS_MESSAGE_PREFIX} ${reason}`
+  if (kind === "review_failed") {
+    // A technical failure is not a safety verdict. Keep execution blocked, but
+    // let the agent retry the same action once so a fresh review can run.
+    return `${prefix} No safety decision was reached, so the action remains blocked until a review succeeds. Retry the same action once if it is still needed; do not change the action solely to obtain another review.`
+  }
+  return `${prefix} Do not retry the exact blocked action. Continue the task using a safer alternative when possible; ask the user only if no useful safe path remains.`
 }
 
 export function sameLocation(

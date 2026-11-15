@@ -1,4 +1,4 @@
-import { AUTO_PERMISSIONS_MESSAGE_PREFIX, normalizeAskedEvent, normalizeRepliedEvent } from "./context.ts"
+import { denialContinuation, normalizeAskedEvent, normalizeRepliedEvent } from "./context.ts"
 import type { PermissionRequest, RuntimeContext } from "./types.ts"
 
 type Handler = (event: unknown) => void
@@ -62,6 +62,15 @@ export function createStableRuntime(
     return sessionID
   }
 
+  // A denial inside a subagent lands after OpenCode has already errored the
+  // parent's task handle, so resuming it would run a session nobody awaits.
+  // Unknown parentage resolves to false: this fails closed on purpose.
+  const resumableSession = async (sessionID: string) => {
+    await root(sessionID)
+    const session = sessions.get(sessionID)
+    return session !== undefined && session.parentID === undefined
+  }
+
   const context: RuntimeContext = {
     options,
     client,
@@ -88,12 +97,14 @@ export function createStableRuntime(
       if (typeof client.tui?.showToast !== "function") return
       void client.tui.showToast({ directory, ...input }).catch(() => undefined)
     },
-    resumeAfterDenial(sessionID, reason) {
+    resumeAfterDenial(sessionID, reason, kind) {
       if (typeof client.session?.promptAsync !== "function") return
       const controller = new AbortController()
       resumeControllers.add(controller)
-      void waitForIdle(client, sessionID, directory, controller.signal)
-        .then((idle) => {
+      void resumableSession(sessionID)
+        .then(async (resumable) => {
+          if (!resumable) return
+          const idle = await waitForIdle(client, sessionID, directory, controller.signal)
           if (!idle || controller.signal.aborted) return
           const routing = latestUserRouting(messages.get(sessionID) ?? [])
           return client.session.promptAsync({
@@ -103,7 +114,7 @@ export function createStableRuntime(
               ...routing,
               parts: [{
                 type: "text",
-                text: `${AUTO_PERMISSIONS_MESSAGE_PREFIX} ${reason} Do not retry the exact blocked action. Continue the task using a safer alternative when possible; ask the user only if no useful safe path remains.`,
+                text: denialContinuation(reason, kind),
               }],
             },
           })

@@ -8263,6 +8263,7 @@ var Resolved = durable({
 var Event14 = { Updated: Updated10, Resolved, Definitions: inventory(Updated10, Resolved) };
 // src/agent.ts
 var REVIEWER_AGENT_ID = "auto-permissions-reviewer";
+var SERVER_REVIEW_MARKER = "[auto-permissions:server-review]";
 var DECISION_SCHEMA = {
   type: "object",
   additionalProperties: false,
@@ -8414,6 +8415,7 @@ async function appendBounded(path, record) {
 
 // src/config.ts
 var DEFAULT_TIMEOUT_MS = 30000;
+var MAX_TIMEOUT_MS = 300000;
 var DEFAULT_USER_MESSAGE_COUNT = 8;
 function parseConfig(options) {
   const modelValue = options.model;
@@ -8423,7 +8425,7 @@ function parseConfig(options) {
     model,
     modelLabel: typeof modelValue === "string" ? modelValue : undefined,
     variant,
-    timeoutMs: boundedInteger(options.timeoutMs, DEFAULT_TIMEOUT_MS, 100, 30000, "timeoutMs"),
+    timeoutMs: boundedInteger(options.timeoutMs, DEFAULT_TIMEOUT_MS, 100, MAX_TIMEOUT_MS, "timeoutMs"),
     userMessageCount: boundedInteger(options.userMessageCount, DEFAULT_USER_MESSAGE_COUNT, 1, 20, "userMessageCount"),
     shadow: options.shadow === true,
     sessionApprovals: options.sessionApprovals !== false,
@@ -8483,8 +8485,12 @@ function boundedInteger(value, fallback, minimum, maximum, name) {
 var MAX_MESSAGE_CHARS = 4000;
 var AUTO_PERMISSIONS_MESSAGE_PREFIX = "[Auto Permissions] The requested action was blocked:";
 var SERVER_PLUGIN_ID = "opencode.auto-permissions.server";
-function denialContinuation(reason) {
-  return `${AUTO_PERMISSIONS_MESSAGE_PREFIX} ${reason} Do not retry the exact blocked action. Continue the task using a safer alternative when possible; ask the user only if no useful safe path remains.`;
+function denialContinuation(reason, kind = "denied") {
+  const prefix = `${AUTO_PERMISSIONS_MESSAGE_PREFIX} ${reason}`;
+  if (kind === "review_failed") {
+    return `${prefix} No safety decision was reached, so the action remains blocked until a review succeeds. Retry the same action once if it is still needed; do not change the action solely to obtain another review.`;
+  }
+  return `${prefix} Do not retry the exact blocked action. Continue the task using a safer alternative when possible; ask the user only if no useful safe path remains.`;
 }
 function sameLocation(left, right) {
   if (!left?.directory || !right?.directory)
@@ -8651,6 +8657,7 @@ function isPluginContinuation(text) {
 }
 
 // src/opencode-client.ts
+import { randomUUID } from "crypto";
 import { mkdir as mkdir2 } from "fs/promises";
 import { tmpdir } from "os";
 import { join as join2 } from "path";
@@ -8659,7 +8666,23 @@ var REVIEWER_PERMISSIONS = [
   { permission: "StructuredOutput", pattern: "*", action: "allow" }
 ];
 var REVIEWER_DIRECTORY = join2(tmpdir(), "opencode-auto-permissions", "reviewer");
+var REVIEWER_READ_DISABLED = join2(REVIEWER_DIRECTORY, `.read-disabled-${randomUUID()}`, "*");
 var REVIEWER_SESSION_TITLE = "Auto Permissions review";
+function isOpenCodeProvider(model) {
+  return model.providerID === "opencode";
+}
+function reviewerPermissions(model) {
+  return [
+    ...REVIEWER_PERMISSIONS,
+    ...isOpenCodeProvider(model) ? [{ permission: "read", pattern: REVIEWER_READ_DISABLED, action: "allow" }] : []
+  ];
+}
+function reviewerSessionPermissions(model) {
+  return [
+    { action: "*", resource: "*", effect: "deny" },
+    ...isOpenCodeProvider(model) ? [{ action: "read", resource: REVIEWER_READ_DISABLED, effect: "allow" }] : []
+  ];
+}
 
 class OpenCodeClientAdapter {
   client;
@@ -8715,7 +8738,7 @@ class OpenCodeClientAdapter {
         query: location,
         body: {
           title: REVIEWER_SESSION_TITLE,
-          permission: REVIEWER_PERMISSIONS
+          permission: reviewerPermissions(input.model)
         }
       } : {
         ...location,
@@ -8723,7 +8746,7 @@ class OpenCodeClientAdapter {
         agent: REVIEWER_AGENT_ID,
         model: input.model,
         metadata: { source: "opencode-auto-permissions" },
-        permission: REVIEWER_PERMISSIONS
+        permission: reviewerPermissions(input.model)
       };
       const created = unwrapData(await session.create(createInput, { signal: input.signal }));
       if (!isRecord2(created) || typeof created.id !== "string") {
@@ -8835,7 +8858,8 @@ Example: {"decision":"allow","reasonCode":"authorized_action","reason":"The acti
         title: REVIEWER_SESSION_TITLE,
         agent: REVIEWER_AGENT_ID,
         model: input.model,
-        location: { directory: REVIEWER_DIRECTORY }
+        location: { directory: REVIEWER_DIRECTORY },
+        ...isOpenCodeProvider(input.model) ? { permissions: reviewerSessionPermissions(input.model) } : {}
       }, { signal: input.signal }));
       if (!isRecord2(session) || typeof session.id !== "string")
         throw new Error("OpenCode failed to create a reviewer session");
@@ -9166,7 +9190,7 @@ async function reviewAndReply(context, client, config, request, parentSignal, ov
   context.showToast?.({ title: "Blocked", message: decision.reason, variant: "warning", duration: 4000 });
   writeDecision(config, request, startedAt, decision, decisionSource(policyDecision, cachedDecision), result);
   if (result === "replied")
-    context.resumeAfterDenial?.(request.sessionID, decision.reason);
+    context.resumeAfterDenial?.(request.sessionID, decision.reason, "denied");
 }
 async function rejectAfterFailure(context, client, config, request, startedAt, error, overrides) {
   writeFailure(config, request, startedAt, error);
@@ -9174,7 +9198,7 @@ async function rejectAfterFailure(context, client, config, request, startedAt, e
   if (config.shadow || !await isRequestPending(context, request))
     return;
   const category = failureCategory(error);
-  const reason = category === "timeout" ? "Permission review timed out, so the action was blocked; continue with a narrower or lower-risk step and retry only if needed." : "Permission review failed, so the action was blocked; continue with a narrower or lower-risk step and retry only if needed.";
+  const reason = category === "timeout" ? "Permission review timed out before a safety decision was made, so the action remains blocked. This was not a safety denial." : "Permission review could not complete, so the action remains blocked. This was not a safety denial.";
   const result = await client.reply({
     sessionID: request.sessionID,
     requestID: request.id,
@@ -9184,7 +9208,7 @@ async function rejectAfterFailure(context, client, config, request, startedAt, e
   });
   context.showToast?.({ title: "Blocked", message: reason, variant: "warning", duration: 4000 });
   if (result === "replied")
-    context.resumeAfterDenial?.(request.sessionID, reason);
+    context.resumeAfterDenial?.(request.sessionID, reason, "review_failed");
 }
 function eligibleForSessionApproval(config, request, input) {
   if (!config.sessionApprovals || request.always.length === 0)
@@ -9429,6 +9453,11 @@ function createStableRuntime(injectedClient, options, directory) {
     }
     return sessionID;
   };
+  const resumableSession = async (sessionID) => {
+    await root(sessionID);
+    const session = sessions.get(sessionID);
+    return session !== undefined && session.parentID === undefined;
+  };
   const context = {
     options,
     client,
@@ -9459,12 +9488,15 @@ function createStableRuntime(injectedClient, options, directory) {
         return;
       });
     },
-    resumeAfterDenial(sessionID, reason) {
+    resumeAfterDenial(sessionID, reason, kind) {
       if (typeof client.session?.promptAsync !== "function")
         return;
       const controller = new AbortController;
       resumeControllers.add(controller);
-      waitForIdle(client, sessionID, directory, controller.signal).then((idle) => {
+      resumableSession(sessionID).then(async (resumable) => {
+        if (!resumable)
+          return;
+        const idle = await waitForIdle(client, sessionID, directory, controller.signal);
         if (!idle || controller.signal.aborted)
           return;
         const routing = latestUserRouting(messages.get(sessionID) ?? []);
@@ -9475,7 +9507,7 @@ function createStableRuntime(injectedClient, options, directory) {
             ...routing,
             parts: [{
               type: "text",
-              text: `${AUTO_PERMISSIONS_MESSAGE_PREFIX} ${reason} Do not retry the exact blocked action. Continue the task using a safer alternative when possible; ask the user only if no useful safe path remains.`
+              text: denialContinuation(reason, kind)
             }]
           }
         });
@@ -9595,6 +9627,11 @@ function isRecord4(value) {
 }
 
 // src/server.ts
+var REVIEWER_DESCRIPTION = "Hidden, no-tool permission reviewer used by OpenCode Auto Permissions.";
+var MAX_SESSION_CACHE = 256;
+var MAX_MESSAGE_CACHE = 32;
+var MAX_PERMISSION_CACHE = 64;
+var MAX_MESSAGES_PER_SESSION = 200;
 var v2Plugin = define({
   id: SERVER_PLUGIN_ID,
   async setup(context) {
@@ -9604,7 +9641,7 @@ var v2Plugin = define({
         if (config.model)
           agent.model = config.model;
         agent.system = REVIEWER_SYSTEM_PROMPT;
-        agent.description = "Hidden, no-tool permission reviewer used by OpenCode Auto Permissions.";
+        agent.description = REVIEWER_DESCRIPTION;
         agent.mode = "subagent";
         agent.hidden = true;
         agent.steps = 1;
@@ -9617,7 +9654,20 @@ var v2Plugin = define({
       return;
     if (!supportsServerV2Review(context))
       return;
-    return installServerV2Reviewer(context, config.diagnosticsPath);
+    const cleanup = installServerV2Reviewer(context, config.diagnosticsPath);
+    if (!cleanup)
+      return;
+    try {
+      await context.agent.transform((draft) => {
+        draft.update(REVIEWER_AGENT_ID, (agent) => {
+          agent.description = `${REVIEWER_DESCRIPTION} ${SERVER_REVIEW_MARKER}`;
+        });
+      });
+    } catch (error) {
+      cleanup();
+      throw error;
+    }
+    return cleanup;
   }
 });
 function supportsServerV2Review(context) {
@@ -9642,9 +9692,7 @@ function installServerV2Reviewer(context, diagnosticsPath) {
       ...typeof fetched.parentID === "string" ? { parentID: fetched.parentID } : {},
       ...isRecord5(fetched.location) ? { location: fetched.location } : {}
     };
-    if (sessions.size >= 256)
-      sessions.delete(sessions.keys().next().value);
-    sessions.set(sessionID, info);
+    setBounded(sessions, sessionID, info, MAX_SESSION_CACHE);
     return info;
   };
   const root = async (sessionID) => {
@@ -9682,31 +9730,47 @@ function installServerV2Reviewer(context, diagnosticsPath) {
           get: (sessionID, messageID) => (messages.get(sessionID) ?? []).find((message) => isRecord5(message) && message.id === messageID),
           sync: async (sessionID) => {
             const list = unwrapServerData(await context.session.context({ sessionID }));
-            messages.set(sessionID, Array.isArray(list) ? list : []);
+            const bounded = Array.isArray(list) ? list.slice(-MAX_MESSAGES_PER_SESSION) : [];
+            setBounded(messages, sessionID, bounded, MAX_MESSAGE_CACHE);
           }
         },
         permission: {
           list: (sessionID) => permissions.get(sessionID),
           sync: async (sessionID) => {
             const list = unwrapServerData(await context.permission.list({ sessionID }));
-            permissions.set(sessionID, Array.isArray(list) ? list : []);
+            setBounded(permissions, sessionID, Array.isArray(list) ? list : [], MAX_PERMISSION_CACHE);
           }
         }
       },
       location: { default: () => context.location ?? {} }
     },
-    resumeAfterDenial(sessionID, reason) {
+    resumeAfterDenial(sessionID, reason, kind) {
       if (typeof context.session?.prompt !== "function")
         return;
-      const text = denialContinuation(reason);
-      Promise.resolve(context.session.prompt({ sessionID, text, delivery: "steer" })).then(() => {
-        writeDiagnostic(diagnosticsPath, {
-          timestamp: new Date().toISOString(),
-          sessionID,
-          event: "resumed",
-          delivery: "steer"
+      (async () => {
+        const info = await getSession(sessionID).catch(() => {
+          return;
         });
-      }).catch(async () => {
+        if (!info || info.parentID) {
+          writeDiagnostic(diagnosticsPath, {
+            timestamp: new Date().toISOString(),
+            sessionID,
+            event: "resume_failed",
+            errorMessage: info ? "denial continuation skipped for a child session" : "denial continuation skipped for an unknown session"
+          });
+          return;
+        }
+        const text = denialContinuation(reason, kind);
+        try {
+          await context.session.prompt({ sessionID, text, delivery: "steer" });
+          writeDiagnostic(diagnosticsPath, {
+            timestamp: new Date().toISOString(),
+            sessionID,
+            event: "resumed",
+            delivery: "steer"
+          });
+          return;
+        } catch {}
         try {
           await context.session.prompt({ sessionID, text, resume: true });
           writeDiagnostic(diagnosticsPath, {
@@ -9723,7 +9787,7 @@ function installServerV2Reviewer(context, diagnosticsPath) {
             errorMessage: describeError(error).message
           });
         }
-      });
+      })();
     }
   };
   const stopReviewer = installReviewer(runtimeContext, { protocols: ["v2"] });
@@ -9760,6 +9824,14 @@ function installServerV2Reviewer(context, diagnosticsPath) {
     messages.clear();
     permissions.clear();
   };
+}
+function setBounded(map, key, value, limit) {
+  if (!map.has(key) && map.size >= limit) {
+    const oldest = map.keys().next().value;
+    if (oldest !== undefined)
+      map.delete(oldest);
+  }
+  map.set(key, value);
 }
 function unwrapServerData(result) {
   let value = result;
@@ -9804,7 +9876,7 @@ var legacyPlugin = async (input, options = {}) => {
         mode: "subagent",
         hidden: true,
         steps: 1,
-        tools: { "*": false },
+        tools: { "*": false, read: true },
         permission: { "*": "deny" }
       };
       value.agent[REVIEWER_AGENT_ID] = reviewer;

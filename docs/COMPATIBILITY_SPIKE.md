@@ -16,7 +16,13 @@ OpenCode `1.18.12`.
 - The transitional beta server loader accepts the legacy `{ server() }` module
   envelope; the package also exports the newer `id/setup` shape.
 - The server plugin registers a hidden reviewer agent with wildcard-deny
-  permissions and no ordinary tools.
+  permissions and no ordinary tools. The read tool stays present so OpenCode
+  free-tier provenance checks accept reviewer requests, but an unreachable
+  allow rule keeps every real read denied.
+- Current V2 builds install the reviewer on the server and filter
+  `permission.asked` events by location. Multiple attached TUIs share one
+  reviewer; the TUI path remains a fallback for older betas and is disposed
+  when the server capability marker appears.
 - Permission events use `permission.v2.asked` and
   `permission.v2.replied` with action, resources, and tool provenance.
 - V2 session-scoped permission replies work. A live smoke test moved from one
@@ -59,9 +65,10 @@ Reviewer-only system isolation reduced the warm request to:
 
 Cold end-to-end review remains approximately 6 seconds in this beta because
 location services and globally discovered skills initialize before the first
-request. The plugin now performs best-effort, no-model prewarming and uses an
-eight-second timeout. Further latency work is required before claiming the
-target sub-1.5-second P95 UX.
+request. The plugin now performs best-effort, no-model prewarming and uses a
+30-second default per-model timeout, configurable up to 300 seconds for slow
+local models. Further latency work is required before claiming the target
+sub-1.5-second P95 UX.
 
 ## Beta Inconsistencies Handled
 
@@ -94,3 +101,14 @@ target sub-1.5-second P95 UX.
   still running the prompt is delivered with `delivery: "steer"` so the
   feedback lands mid-turn; once idle it is admitted with `resume: true`.
   Resume outcomes are recorded as `resumed`/`resume_failed` diagnostics.
+- Denial continuations are only admitted to resolved root sessions. A denied
+  subagent is left terminated because its parent task handle has already
+  errored; unknown parentage also fails closed.
+- A technical review failure (timeout, provider error, invalid output) is not
+  reported as a safety denial. Execution stays blocked, and the continuation
+  says no safety decision was reached and permits one retry of the same action
+  so a fresh review can run. Genuine safety denials still say not to retry the
+  blocked action.
+- OpenCode free-tier models reject requests that omit the `read` tool. Reviewer
+  sessions keep a random, never-created `read` allow rule while denying every
+  real read, preserving reviewer isolation and unblocking free-model reviews.

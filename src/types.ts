@@ -9,6 +9,8 @@ export interface ReviewModel {
 
 export type PermissionProtocol = "stable" | "v2"
 
+export type DenialKind = "denied" | "review_failed"
+
 export interface PermissionRequest {
   id: string
   sessionID: string
@@ -70,7 +72,7 @@ export interface RuntimeContext {
     variant?: "info" | "success" | "warning" | "error"
     duration?: number
   }): void
-  resumeAfterDenial?(sessionID: string, reason: string): void
+  resumeAfterDenial?(sessionID: string, reason: string, kind?: DenialKind): void
 }
 
 export interface ReviewerClient {

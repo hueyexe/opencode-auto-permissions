@@ -7,7 +7,7 @@ function harness(options: Record<string, unknown> = { model: "cloudflare-workers
   const requests: PermissionRequest[] = []
   const replies: Parameters<ReviewerClient["reply"]>[0][] = []
   const toasts: string[] = []
-  const resumptions: Array<{ sessionID: string; reason: string }> = []
+  const resumptions: Array<{ sessionID: string; reason: string; kind?: string | undefined }> = []
 
   const context: RuntimeContext = {
     options,
@@ -83,7 +83,7 @@ function harness(options: Record<string, unknown> = { model: "cloudflare-workers
       location: { default: () => ({ directory: "/repo" }) },
     },
     showToast: (input) => toasts.push(input.title ?? input.message),
-    resumeAfterDenial: (sessionID, reason) => resumptions.push({ sessionID, reason }),
+    resumeAfterDenial: (sessionID, reason, kind) => resumptions.push({ sessionID, reason, kind }),
   }
 
   const client: ReviewerClient = {
@@ -438,6 +438,7 @@ describe("installReviewer", () => {
       {
         sessionID: "ses_root",
         reason: "Recursively deleting the filesystem root or home directory would cause catastrophic data loss; target only the specific generated directory instead.",
+        kind: "denied",
       },
     ])
     dispose()
@@ -455,7 +456,7 @@ describe("installReviewer", () => {
     expect(app.requests).toHaveLength(0)
     expect(app.toasts).toEqual(["Blocked"])
     expect(app.resumptions).toEqual([
-      { sessionID: "ses_root", reason: "Authorization is missing; continue with a safer alternative." },
+      { sessionID: "ses_root", reason: "Authorization is missing; continue with a safer alternative.", kind: "denied" },
     ])
     dispose()
   })
@@ -478,12 +479,13 @@ describe("installReviewer", () => {
     expect(app.replies[0]).toMatchObject({ reply: "reject", message: expect.stringContaining("timed out") })
     expect(app.requests).toHaveLength(0)
     expect(app.toasts).toEqual(["Blocked"])
-    expect(app.resumptions[0]?.reason).toContain("narrower or lower-risk step")
+    expect(app.resumptions[0]).toMatchObject({ kind: "review_failed" })
+    expect(app.resumptions[0]?.reason).toContain("not a safety denial")
     expect(failures).toHaveLength(1)
     dispose()
   })
 
-  test("rejects a provider failure and resumes with safer guidance", async () => {
+  test("rejects a provider failure and distinguishes it from a safety denial", async () => {
     const app = harness()
     app.client.generate = async () => { throw new Error("provider unavailable") }
     app.requests.push(request("git push origin feature"))
@@ -492,9 +494,10 @@ describe("installReviewer", () => {
     app.emit("permission.v2.asked", app.requests[0])
     await settle()
 
-    expect(app.replies[0]).toMatchObject({ reply: "reject", message: expect.stringContaining("review failed") })
+    expect(app.replies[0]).toMatchObject({ reply: "reject", message: expect.stringContaining("could not complete") })
     expect(app.requests).toHaveLength(0)
-    expect(app.resumptions[0]?.reason).toContain("narrower or lower-risk step")
+    expect(app.resumptions[0]).toMatchObject({ kind: "review_failed" })
+    expect(app.resumptions[0]?.reason).toContain("not a safety denial")
     dispose()
   })
 

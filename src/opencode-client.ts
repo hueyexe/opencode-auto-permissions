@@ -1,5 +1,6 @@
 import type { ReviewModel, ReviewerClient } from "./types.ts"
 import { DECISION_SCHEMA, REVIEWER_AGENT_ID } from "./agent.ts"
+import { randomUUID } from "node:crypto"
 import { mkdir } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -9,7 +10,45 @@ const REVIEWER_PERMISSIONS = [
   { permission: "StructuredOutput", pattern: "*", action: "allow" },
 ] as const
 export const REVIEWER_DIRECTORY = join(tmpdir(), "opencode-auto-permissions", "reviewer")
+// OpenCode's free-tier gateway rejects requests that omit the read tool. Keep
+// one unreachable allow rule so the tool survives permission filtering while
+// every real read remains denied. The random path is never created.
+const REVIEWER_READ_DISABLED = join(REVIEWER_DIRECTORY, `.read-disabled-${randomUUID()}`, "*")
 const REVIEWER_SESSION_TITLE = "Auto Permissions review"
+
+type LegacyPermissionRule = {
+  permission: string
+  pattern: string
+  action: "allow" | "deny"
+}
+
+type SessionPermissionRule = {
+  action: string
+  resource: string
+  effect: "allow" | "deny"
+}
+
+function isOpenCodeProvider(model: ReviewModel): boolean {
+  return model.providerID === "opencode"
+}
+
+function reviewerPermissions(model: ReviewModel): LegacyPermissionRule[] {
+  return [
+    ...REVIEWER_PERMISSIONS,
+    ...(isOpenCodeProvider(model)
+      ? [{ permission: "read", pattern: REVIEWER_READ_DISABLED, action: "allow" as const }]
+      : []),
+  ]
+}
+
+function reviewerSessionPermissions(model: ReviewModel): SessionPermissionRule[] {
+  return [
+    { action: "*", resource: "*", effect: "deny" },
+    ...(isOpenCodeProvider(model)
+      ? [{ action: "read", resource: REVIEWER_READ_DISABLED, effect: "allow" as const }]
+      : []),
+  ]
+}
 
 export class OpenCodeClientAdapter implements ReviewerClient {
   constructor(private readonly client: any) {}
@@ -65,7 +104,7 @@ export class OpenCodeClientAdapter implements ReviewerClient {
             query: location,
             body: {
               title: REVIEWER_SESSION_TITLE,
-              permission: REVIEWER_PERMISSIONS,
+              permission: reviewerPermissions(input.model),
             },
           }
         : {
@@ -74,7 +113,7 @@ export class OpenCodeClientAdapter implements ReviewerClient {
             agent: REVIEWER_AGENT_ID,
             model: input.model,
             metadata: { source: "opencode-auto-permissions" },
-            permission: REVIEWER_PERMISSIONS,
+            permission: reviewerPermissions(input.model),
           }
       const created = unwrapData(await session.create(createInput, { signal: input.signal }))
       if (!isRecord(created) || typeof created.id !== "string") {
@@ -196,6 +235,9 @@ export class OpenCodeClientAdapter implements ReviewerClient {
         agent: REVIEWER_AGENT_ID,
         model: input.model,
         location: { directory: REVIEWER_DIRECTORY },
+        ...(isOpenCodeProvider(input.model)
+          ? { permissions: reviewerSessionPermissions(input.model) }
+          : {}),
       }, { signal: input.signal }))
       if (!isRecord(session) || typeof session.id !== "string") throw new Error("OpenCode failed to create a reviewer session")
       sessionID = session.id

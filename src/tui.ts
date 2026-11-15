@@ -1,11 +1,12 @@
 import { Plugin } from "@opencode-ai/plugin/tui"
 import type { Context } from "@opencode-ai/plugin/tui/plugin"
+import { REVIEWER_AGENT_ID, SERVER_REVIEW_MARKER } from "./agent.ts"
 import { denialContinuation, sameLocation, SERVER_PLUGIN_ID } from "./context.ts"
 import { parseConfig } from "./config.ts"
 import { describeError, writeDiagnostic } from "./diagnostics.ts"
 import { installReviewer } from "./reviewer.ts"
 import { protocolForVersion } from "./stable.ts"
-import type { RuntimeContext } from "./types.ts"
+import type { DenialKind, RuntimeContext } from "./types.ts"
 import { PLUGIN_VERSION } from "./version.ts"
 
 export const id = "opencode.auto-permissions"
@@ -14,33 +15,92 @@ const plugin = Plugin.define({
   id,
   async setup(context) {
     if (await serverOwnsV2Review(context)) return
-    return installReviewer(fromContext(context), { protocols: ["v2"] })
+    const dispose = installReviewer(fromContext(context), { protocols: ["v2"] })
+    return reconcileServerOwnership(context, dispose)
   },
 })
 
+/**
+ * Reconciles TUI fallback ownership when the initial server capability probe
+ * was inconclusive. A transient plugin-list failure must not permanently leave
+ * two reviewers running; once the server marker appears, the TUI reviewer is
+ * disposed.
+ */
+function reconcileServerOwnership(context: Context, dispose: () => void): () => void {
+  let stopped = false
+  const stop = () => {
+    if (stopped) return
+    stopped = true
+    clearInterval(timer)
+    dispose()
+  }
+  const timer = setInterval(() => {
+    if (stopped) return
+    void serverOwnsV2Review(context)
+      .then((owns) => {
+        if (owns) stop()
+      })
+      .catch(() => undefined)
+  }, 5_000)
+  timer.unref?.()
+  return stop
+}
+
 async function serverOwnsV2Review(context: Context): Promise<boolean> {
   const client = context.client as unknown as {
-    session?: { generate?: unknown }
-    plugin?: { list?: (input?: { location?: Context["location"] }) => Promise<unknown> }
+    plugin?: {
+      list?: (input?: { location?: Context["location"] }) => Promise<unknown>
+      awaitActivation?: (input?: { location?: Context["location"] }) => Promise<unknown>
+    }
+    agent?: { list?: (input?: { location?: Context["location"] }) => Promise<unknown> }
   }
-  if (typeof client?.session?.generate !== "function" || typeof client?.plugin?.list !== "function") {
+  if (typeof client?.plugin?.list !== "function" || typeof client?.agent?.list !== "function") {
     return false
   }
-  try {
-    const plugins = unwrap(await client.plugin.list(context.location ? { location: context.location } : undefined))
-    return (
-      Array.isArray(plugins) &&
-      plugins.some(
-        (entry) =>
-          typeof entry === "object" &&
-          entry !== null &&
-          Reflect.get(entry, "id") === SERVER_PLUGIN_ID &&
-          Reflect.get(Reflect.get(entry, "state") ?? {}, "status") !== "failed",
-      )
-    )
-  } catch {
+  const location = context.location ? { location: context.location } : undefined
+  if (typeof client.plugin.awaitActivation === "function") {
+    await Promise.race([
+      client.plugin.awaitActivation(location).catch(() => undefined),
+      delay(2_000),
+    ])
+  }
+  const plugins = await listWithRetry(() => client.plugin!.list!(location))
+  if (!plugins?.some((entry) =>
+    isRecord(entry) &&
+    Reflect.get(entry, "id") === SERVER_PLUGIN_ID &&
+    Reflect.get(Reflect.get(entry, "state") ?? {}, "status") === "active"
+  )) {
     return false
   }
+  const agents = unwrap(await client.agent.list(location).catch(() => undefined))
+  if (!Array.isArray(agents)) return false
+  return agents.some((entry) =>
+    isRecord(entry) &&
+    Reflect.get(entry, "id") === REVIEWER_AGENT_ID &&
+    typeof Reflect.get(entry, "description") === "string" &&
+    Reflect.get(entry, "description").includes(SERVER_REVIEW_MARKER)
+  )
+}
+
+async function listWithRetry(list: () => Promise<unknown>): Promise<unknown[] | undefined> {
+  for (let attempt = 0; attempt < 5; attempt++) {
+    try {
+      const value = unwrap(await list())
+      if (Array.isArray(value)) return value
+    } catch {
+      // Retry transient plugin-list failures before falling back.
+    }
+    if (attempt < 4) await delay(200)
+  }
+  return undefined
+}
+
+function delay(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds))
+}
+
+function isRecord(value: unknown): value is Record<string, any> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
 }
 
 /**
@@ -101,8 +161,8 @@ function fromContext(context: Context): RuntimeContext {
     showToast(input) {
       context.ui.toast.show(input)
     },
-    resumeAfterDenial(sessionID, reason) {
-      void resumeV2Session(context, sessionID, reason)
+    resumeAfterDenial(sessionID, reason, kind) {
+      void resumeV2Session(context, sessionID, reason, kind)
     },
   }
 }
@@ -153,13 +213,31 @@ function clientCapabilities(client: unknown, sessionData: unknown): string[] {
  * idle it is admitted with resume so a fresh loop starts. Both the current
  * flat client and the older `v2` client shapes are supported.
  */
-async function resumeV2Session(context: Context, sessionID: string, reason: string): Promise<void> {
+async function resumeV2Session(
+  context: Context,
+  sessionID: string,
+  reason: string,
+  kind: DenialKind = "denied",
+): Promise<void> {
   const config = parseConfig(context.options)
+  // A denial inside a subagent lands after OpenCode has already errored the
+  // parent's task handle. Never resume a child or an unknown session; only a
+  // resolved root session can be continued safely.
+  const session = context.data.session.get(sessionID)
+  if (!session || session.parentID) {
+    writeDiagnostic(config.diagnosticsPath, {
+      timestamp: new Date().toISOString(),
+      sessionID,
+      event: "resume_failed",
+      errorMessage: session ? "denial continuation skipped for a child session" : "denial continuation skipped for an unknown session",
+    })
+    return
+  }
   const client = context.client as unknown as {
     session?: { prompt?: (input: Record<string, unknown>) => Promise<unknown> }
     v2?: { session?: { prompt?: (input: Record<string, unknown>) => Promise<unknown> } }
   }
-  const text = continuation(reason)
+  const text = continuation(reason, kind)
   const running = isRunning(context, sessionID)
   const flatPrompt = client?.session?.prompt
   const legacyPrompt = client?.v2?.session?.prompt
@@ -227,8 +305,8 @@ function isRunning(context: Context, sessionID: string): boolean {
   return typeof status === "function" ? status.call(context.data.session, sessionID) === "running" : false
 }
 
-function continuation(reason: string): string {
-  return denialContinuation(reason)
+function continuation(reason: string, kind: DenialKind = "denied"): string {
+  return denialContinuation(reason, kind)
 }
 
 async function isStableRuntime(client: unknown): Promise<boolean> {
@@ -300,8 +378,8 @@ function fromLegacyApi(api: LegacyTuiApi, options: Readonly<Record<string, unkno
     },
     location: { directory: api.state.path.directory },
     showToast: api.ui.toast,
-    resumeAfterDenial(sessionID, reason) {
-      void resumeLegacySession(api, sessionID, reason)
+    resumeAfterDenial(sessionID, reason, kind) {
+      void resumeLegacySession(api, sessionID, reason, kind)
     },
   }
 }
@@ -312,7 +390,14 @@ function fromLegacyApi(api: LegacyTuiApi, options: Readonly<Record<string, unkno
  * instead of a flat `text` field; the stable client's `session.prompt` uses a
  * `{ path, query, body }` shape that must not be called accidentally.
  */
-async function resumeLegacySession(api: LegacyTuiApi, sessionID: string, reason: string): Promise<void> {
+async function resumeLegacySession(
+  api: LegacyTuiApi,
+  sessionID: string,
+  reason: string,
+  kind: DenialKind = "denied",
+): Promise<void> {
+  const session = api.state.session.get(sessionID)
+  if (!session || session.parentID) return
   const client = api.client as {
     v2?: { session?: { prompt?: (input: Record<string, unknown>) => Promise<unknown> } }
     session?: { prompt?: (input: Record<string, unknown>) => Promise<unknown> }
@@ -322,7 +407,7 @@ async function resumeLegacySession(api: LegacyTuiApi, sessionID: string, reason:
     if (typeof client?.v2?.session?.prompt === "function") {
       await client.v2!.session!.prompt!({
         sessionID,
-        prompt: { text: continuation(reason) },
+        prompt: { text: continuation(reason, kind) },
         delivery: "queue",
         resume: true,
       })
@@ -332,7 +417,7 @@ async function resumeLegacySession(api: LegacyTuiApi, sessionID: string, reason:
       typeof client?.session?.prompt === "function" &&
       typeof client?.permission?.request?.list === "function"
     ) {
-      await client.session!.prompt!({ sessionID, text: continuation(reason), resume: true })
+      await client.session!.prompt!({ sessionID, text: continuation(reason, kind), resume: true })
     }
   } catch {
     // Resuming is best effort; the rejection itself already failed closed.

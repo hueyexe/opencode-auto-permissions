@@ -108,7 +108,8 @@ On timeout, invalid output, missing model, provider failure, or an internal
 plugin error:
 
 ```text
-Blocked · Permission review failed; continue with a narrower or lower-risk step.
+Blocked · Permission review could not complete, so the action remains blocked.
+This was not a safety denial. Retry the same action once if it is still needed.
 ```
 
 Rate-limit this feedback. Never turn a reviewer failure into an approval or an unresolved prompt.
@@ -439,7 +440,8 @@ keys, invalid reason codes, oversized reasons, and any decision other than
 
 ### Runtime limits
 
-- Current compatibility timeout: 8 seconds, covering measured cold beta startup.
+- Current compatibility timeout: 30 seconds by default, configurable up to
+  300 seconds for slow local models.
 - One OpenCode schema-validation retry is requested; no custom model retry loop.
 - Small output limit where the endpoint/model supports it.
 - Abort immediately when the permission is resolved elsewhere.

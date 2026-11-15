@@ -1,5 +1,5 @@
 import { Plugin as V2Plugin } from "@opencode-ai/plugin"
-import { REVIEWER_AGENT_ID, REVIEWER_SYSTEM_PROMPT } from "./agent.ts"
+import { REVIEWER_AGENT_ID, REVIEWER_SYSTEM_PROMPT, SERVER_REVIEW_MARKER } from "./agent.ts"
 import { parseConfig } from "./config.ts"
 import { denialContinuation, sameLocation, SERVER_PLUGIN_ID } from "./context.ts"
 import { describeError, writeDiagnostic } from "./diagnostics.ts"
@@ -7,6 +7,12 @@ import { REVIEWER_DIRECTORY } from "./opencode-client.ts"
 import { installReviewer } from "./reviewer.ts"
 import { createStableRuntime, protocolForVersion } from "./stable.ts"
 import type { PermissionRequest, RuntimeContext } from "./types.ts"
+
+const REVIEWER_DESCRIPTION = "Hidden, no-tool permission reviewer used by OpenCode Auto Permissions."
+const MAX_SESSION_CACHE = 256
+const MAX_MESSAGE_CACHE = 32
+const MAX_PERMISSION_CACHE = 64
+const MAX_MESSAGES_PER_SESSION = 200
 
 const v2Plugin = V2Plugin.define({
   id: SERVER_PLUGIN_ID,
@@ -16,7 +22,7 @@ const v2Plugin = V2Plugin.define({
       draft.update(REVIEWER_AGENT_ID, (agent) => {
         if (config.model) agent.model = config.model as unknown as typeof agent.model
         agent.system = REVIEWER_SYSTEM_PROMPT
-        agent.description = "Hidden, no-tool permission reviewer used by OpenCode Auto Permissions."
+        agent.description = REVIEWER_DESCRIPTION
         agent.mode = "subagent"
         agent.hidden = true
         agent.steps = 1
@@ -26,7 +32,22 @@ const v2Plugin = V2Plugin.define({
     if (config.runtime === "stable") return
     if (context.location?.directory === REVIEWER_DIRECTORY) return
     if (!supportsServerV2Review(context)) return
-    return installServerV2Reviewer(context, config.diagnosticsPath)
+    const cleanup = installServerV2Reviewer(context, config.diagnosticsPath)
+    if (!cleanup) return
+    try {
+      // Advertise that this location has an active server reviewer. The TUI
+      // fallback checks this marker instead of assuming plugin presence means
+      // the server installed a reviewer.
+      await context.agent.transform((draft) => {
+        draft.update(REVIEWER_AGENT_ID, (agent) => {
+          agent.description = `${REVIEWER_DESCRIPTION} ${SERVER_REVIEW_MARKER}`
+        })
+      })
+    } catch (error) {
+      cleanup()
+      throw error
+    }
+    return cleanup
   },
 })
 
@@ -61,8 +82,7 @@ function installServerV2Reviewer(context: any, diagnosticsPath: string | undefin
       ...(typeof fetched.parentID === "string" ? { parentID: fetched.parentID } : {}),
       ...(isRecord(fetched.location) ? { location: fetched.location } : {}),
     }
-    if (sessions.size >= 256) sessions.delete(sessions.keys().next().value!)
-    sessions.set(sessionID, info)
+    setBounded(sessions, sessionID, info, MAX_SESSION_CACHE)
     return info
   }
 
@@ -99,49 +119,65 @@ function installServerV2Reviewer(context: any, diagnosticsPath: string | undefin
             (messages.get(sessionID) ?? []).find((message) => isRecord(message) && message.id === messageID),
           sync: async (sessionID) => {
             const list = unwrapServerData(await context.session.context({ sessionID }))
-            messages.set(sessionID, Array.isArray(list) ? list : [])
+            const bounded = Array.isArray(list) ? list.slice(-MAX_MESSAGES_PER_SESSION) : []
+            setBounded(messages, sessionID, bounded, MAX_MESSAGE_CACHE)
           },
         },
         permission: {
           list: (sessionID) => permissions.get(sessionID),
           sync: async (sessionID) => {
             const list = unwrapServerData(await context.permission.list({ sessionID }))
-            permissions.set(sessionID, Array.isArray(list) ? list : [])
+            setBounded(permissions, sessionID, Array.isArray(list) ? list : [], MAX_PERMISSION_CACHE)
           },
         },
       },
       location: { default: () => context.location ?? {} },
     },
-    resumeAfterDenial(sessionID, reason) {
+    resumeAfterDenial(sessionID, reason, kind) {
       if (typeof context.session?.prompt !== "function") return
-      const text = denialContinuation(reason)
-      void Promise.resolve(context.session.prompt({ sessionID, text, delivery: "steer" }))
-        .then(() => {
+      void (async () => {
+        const info = await getSession(sessionID).catch(() => undefined)
+        if (!info || info.parentID) {
+          writeDiagnostic(diagnosticsPath, {
+            timestamp: new Date().toISOString(),
+            sessionID,
+            event: "resume_failed",
+            errorMessage: info
+              ? "denial continuation skipped for a child session"
+              : "denial continuation skipped for an unknown session",
+          })
+          return
+        }
+        const text = denialContinuation(reason, kind)
+        try {
+          await context.session.prompt({ sessionID, text, delivery: "steer" })
           writeDiagnostic(diagnosticsPath, {
             timestamp: new Date().toISOString(),
             sessionID,
             event: "resumed",
             delivery: "steer",
           })
-        })
-        .catch(async () => {
-          try {
-            await context.session.prompt({ sessionID, text, resume: true })
-            writeDiagnostic(diagnosticsPath, {
-              timestamp: new Date().toISOString(),
-              sessionID,
-              event: "resumed",
-              delivery: "resume_fallback",
-            })
-          } catch (error) {
-            writeDiagnostic(diagnosticsPath, {
-              timestamp: new Date().toISOString(),
-              sessionID,
-              event: "resume_failed",
-              errorMessage: describeError(error).message,
-            })
-          }
-        })
+          return
+        } catch {
+          // Fall back to an idle resume below.
+        }
+        try {
+          await context.session.prompt({ sessionID, text, resume: true })
+          writeDiagnostic(diagnosticsPath, {
+            timestamp: new Date().toISOString(),
+            sessionID,
+            event: "resumed",
+            delivery: "resume_fallback",
+          })
+        } catch (error) {
+          writeDiagnostic(diagnosticsPath, {
+            timestamp: new Date().toISOString(),
+            sessionID,
+            event: "resume_failed",
+            errorMessage: describeError(error).message,
+          })
+        }
+      })()
     },
   }
 
@@ -179,6 +215,14 @@ function installServerV2Reviewer(context: any, diagnosticsPath: string | undefin
     messages.clear()
     permissions.clear()
   }
+}
+
+function setBounded<K, V>(map: Map<K, V>, key: K, value: V, limit: number): void {
+  if (!map.has(key) && map.size >= limit) {
+    const oldest = map.keys().next().value
+    if (oldest !== undefined) map.delete(oldest)
+  }
+  map.set(key, value)
 }
 
 function unwrapServerData(result: unknown): unknown {
@@ -275,7 +319,10 @@ const legacyPlugin: LegacyPlugin = async (input, options = {}) => {
         mode: "subagent",
         hidden: true,
         steps: 1,
-        tools: { "*": false },
+        // Keep the read tool present so OpenCode's free-tier provenance check
+        // accepts reviewer requests; the wildcard permission below still denies
+        // every real read.
+        tools: { "*": false, read: true },
         permission: { "*": "deny" },
       }
       // The beta runtime accepts wildcard permission keys through its rest

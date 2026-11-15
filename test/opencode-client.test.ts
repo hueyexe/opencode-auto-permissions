@@ -44,7 +44,39 @@ describe("OpenCodeClientAdapter", () => {
       agent: "auto-permissions-reviewer",
       model: { providerID: "example", id: "luna-5.6" },
     })
+    expect(calls[0]?.input).not.toHaveProperty("permissions")
     expect(calls[3]?.input).toEqual({ sessionID: "ses_parent", requestID: "per_1", decision: "once" })
+  })
+
+  test("keeps the read tool available for OpenCode free-tier reviewer requests", async () => {
+    const calls: Array<{ method: string; input: any }> = []
+    const adapter = new OpenCodeClientAdapter({
+      session: {
+        create: async (input: any) => {
+          calls.push({ method: "create", input })
+          return { id: "ses_review" }
+        },
+        generate: async (input: any) => {
+          calls.push({ method: "generate", input })
+          return { text: '{"decision":"allow","reasonCode":"safe","reason":"Safe operation."}' }
+        },
+        remove: async (input: any) => calls.push({ method: "remove", input }),
+        interrupt: async () => {},
+      },
+      permission: { list: async () => [], reply: async () => {} },
+    })
+
+    await adapter.generate({
+      prompt: "review",
+      model: { providerID: "opencode", id: "deepseek-v4.1-flash-free" },
+      parentSessionID: "ses_parent",
+      signal: new AbortController().signal,
+    })
+
+    expect(calls[0]?.input.permissions).toEqual([
+      { action: "*", resource: "*", effect: "deny" },
+      { action: "read", resource: expect.stringContaining(".read-disabled-"), effect: "allow" },
+    ])
   })
 
   test("prewarms the reviewer location without invoking a model", async () => {
@@ -286,6 +318,39 @@ describe("OpenCodeClientAdapter", () => {
         ],
       },
     })
+  })
+
+  test("keeps the read tool available for OpenCode free-tier stable reviewer sessions", async () => {
+    const creates: any[] = []
+    const client = new OpenCodeClientAdapter({
+      postSessionIdPermissionsPermissionId: async () => {},
+      session: {
+        create: async (input: unknown) => {
+          creates.push(input)
+          return { data: { id: "ses_review" } }
+        },
+        prompt: async () => ({
+          data: {
+            info: { structured: { decision: "deny", reasonCode: "x", reason: "Review." } },
+            parts: [],
+          },
+        }),
+        delete: async () => ({ data: true }),
+      },
+    })
+
+    await client.generate({
+      prompt: "review",
+      model: { providerID: "opencode", id: "deepseek-v4.1-flash-free" },
+      parentSessionID: "ses_parent",
+      signal: new AbortController().signal,
+    })
+
+    expect(creates[0]?.body?.permission).toEqual([
+      { permission: "*", pattern: "*", action: "deny" },
+      { permission: "StructuredOutput", pattern: "*", action: "allow" },
+      { permission: "read", pattern: expect.stringContaining(".read-disabled-"), action: "allow" },
+    ])
   })
 
   test("uses the generated stable abort envelope when review is cancelled", async () => {

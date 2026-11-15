@@ -2,6 +2,7 @@ import type { ReviewModel } from "./types.ts"
 import { defaultDiagnosticsPath } from "./diagnostics.ts"
 
 const DEFAULT_TIMEOUT_MS = 30_000
+const MAX_TIMEOUT_MS = 300_000
 const DEFAULT_USER_MESSAGE_COUNT = 8
 
 export interface Config {
@@ -25,7 +26,7 @@ export function parseConfig(options: Readonly<Record<string, unknown>>): Config 
     model,
     modelLabel: typeof modelValue === "string" ? modelValue : undefined,
     variant,
-    timeoutMs: boundedInteger(options.timeoutMs, DEFAULT_TIMEOUT_MS, 100, 30_000, "timeoutMs"),
+    timeoutMs: boundedInteger(options.timeoutMs, DEFAULT_TIMEOUT_MS, 100, MAX_TIMEOUT_MS, "timeoutMs"),
     userMessageCount: boundedInteger(
       options.userMessageCount,
       DEFAULT_USER_MESSAGE_COUNT,

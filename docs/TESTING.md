@@ -92,6 +92,35 @@ Request an action that lacks sufficient authorization.
 Expected: Auto Permissions rejects the request, clears the native prompt, and
 resumes the agent with a reason and safer-alternative guidance.
 
+### Denied subagent
+
+```text
+Ask a subagent to run a command that the reviewer will reject, then report the
+parent task result.
+```
+
+Expected: the child request is rejected and the parent receives the rejection.
+The child must not receive a continuation or create work after the parent task
+handle ends.
+
+### Technical review failure
+
+Configure a deliberately unreachable reviewer model or an extremely short
+`timeoutMs`, then request a model-reviewed action.
+
+Expected: execution remains blocked, and the continuation says no safety
+decision was reached and permits one retry of the same action. It must not
+describe the action as unsafe or forbid retrying it.
+
+### OpenCode free model
+
+Use an `opencode/*-free` model with no dedicated reviewer model and request a
+harmless command such as `pwd`.
+
+Expected: the reviewer request keeps the `read` tool present for the free-tier
+provenance check while all real reads remain denied, and the command is
+reviewed instead of failing with a generic provider error.
+
 ## Headless Launcher Check
 
 To verify isolation and server startup without opening a TUI:

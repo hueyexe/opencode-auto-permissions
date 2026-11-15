@@ -182,7 +182,7 @@ async function reviewAndReply(
   })
   context.showToast?.({ title: "Blocked", message: decision.reason, variant: "warning", duration: 4_000 })
   writeDecision(config, request, startedAt, decision, decisionSource(policyDecision, cachedDecision), result)
-  if (result === "replied") context.resumeAfterDenial?.(request.sessionID, decision.reason)
+  if (result === "replied") context.resumeAfterDenial?.(request.sessionID, decision.reason, "denied")
 }
 
 async function rejectAfterFailure(
@@ -200,8 +200,8 @@ async function rejectAfterFailure(
 
   const category = failureCategory(error)
   const reason = category === "timeout"
-    ? "Permission review timed out, so the action was blocked; continue with a narrower or lower-risk step and retry only if needed."
-    : "Permission review failed, so the action was blocked; continue with a narrower or lower-risk step and retry only if needed."
+    ? "Permission review timed out before a safety decision was made, so the action remains blocked. This was not a safety denial."
+    : "Permission review could not complete, so the action remains blocked. This was not a safety denial."
   const result = await client.reply({
     sessionID: request.sessionID,
     requestID: request.id,
@@ -210,7 +210,7 @@ async function rejectAfterFailure(
     protocol: request.protocol,
   })
   context.showToast?.({ title: "Blocked", message: reason, variant: "warning", duration: 4_000 })
-  if (result === "replied") context.resumeAfterDenial?.(request.sessionID, reason)
+  if (result === "replied") context.resumeAfterDenial?.(request.sessionID, reason, "review_failed")
 }
 
 function eligibleForSessionApproval(

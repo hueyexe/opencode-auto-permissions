@@ -1,5 +1,10 @@
 export const REVIEWER_AGENT_ID = "auto-permissions-reviewer"
 
+// Set on the hidden reviewer agent only after the V2 server plugin has
+// installed its permission reviewer. TUI clients use this capability marker to
+// decide whether to step aside or run their fallback reviewer.
+export const SERVER_REVIEW_MARKER = "[auto-permissions:server-review]"
+
 export const DECISION_SCHEMA = {
   type: "object",
   additionalProperties: false,

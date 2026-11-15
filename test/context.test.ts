@@ -1,7 +1,24 @@
 import { describe, expect, test } from "bun:test"
-import { collectReviewInput, normalizeAskedEvent } from "../src/context.ts"
+import { collectReviewInput, denialContinuation, normalizeAskedEvent } from "../src/context.ts"
 import { buildReviewPrompt } from "../src/prompt.ts"
 import type { PermissionRequest, RuntimeContext } from "../src/types.ts"
+
+describe("denial continuations", () => {
+  test("tells the agent not to retry a safety denial", () => {
+    const text = denialContinuation("The user prohibited this action.")
+
+    expect(text).toContain("Do not retry the exact blocked action")
+    expect(text).not.toContain("not a safety denial")
+  })
+
+  test("distinguishes a technical review failure from a safety denial", () => {
+    const text = denialContinuation("Permission review timed out.", "review_failed")
+
+    expect(text).toContain("No safety decision was reached")
+    expect(text).toContain("Retry the same action once")
+    expect(text).not.toContain("Do not retry the exact blocked action")
+  })
+})
 
 describe("review context isolation", () => {
   test("detects stable and V2 permission payloads sharing the same event name", () => {

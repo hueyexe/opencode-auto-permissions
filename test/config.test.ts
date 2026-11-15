@@ -41,8 +41,14 @@ describe("parseConfig", () => {
     (options) => expect(() => parseConfig(options)).toThrow(),
   )
 
+  test("raises the timeout cap without changing the default", () => {
+    expect(parseConfig({ model: "a/b" }).timeoutMs).toBe(30_000)
+    expect(parseConfig({ model: "a/b", timeoutMs: 300_000 }).timeoutMs).toBe(300_000)
+  })
+
   test("rejects out-of-range runtime options", () => {
     expect(() => parseConfig({ model: "a/b", timeoutMs: 99 })).toThrow(/timeoutMs/)
+    expect(() => parseConfig({ model: "a/b", timeoutMs: 300_001 })).toThrow(/timeoutMs/)
     expect(() => parseConfig({ model: "a/b", userMessageCount: 21 })).toThrow(/userMessageCount/)
   })
 
