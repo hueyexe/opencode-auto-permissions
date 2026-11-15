@@ -8,7 +8,7 @@ const REVIEWER_PERMISSIONS = [
   { permission: "*", pattern: "*", action: "deny" },
   { permission: "StructuredOutput", pattern: "*", action: "allow" },
 ] as const
-const REVIEWER_DIRECTORY = join(tmpdir(), "opencode-auto-permissions", "reviewer")
+export const REVIEWER_DIRECTORY = join(tmpdir(), "opencode-auto-permissions", "reviewer")
 const REVIEWER_SESSION_TITLE = "Auto Permissions review"
 
 export class OpenCodeClientAdapter implements ReviewerClient {
@@ -39,7 +39,7 @@ export class OpenCodeClientAdapter implements ReviewerClient {
     location?: { directory?: string; workspaceID?: string }
     signal: AbortSignal
   }): Promise<unknown> {
-    if (typeof this.client.permission?.request?.list === "function") return this.generateCurrent(input)
+    if (typeof this.client.session?.generate === "function") return this.generateCurrent(input)
     const stable = typeof this.client.postSessionIdPermissionsPermissionId === "function"
     const session = stable ? this.client.session : (this.client.v2?.session ?? this.client.session)
     if (!session || typeof session.create !== "function" || typeof session.prompt !== "function") {
@@ -138,7 +138,10 @@ export class OpenCodeClientAdapter implements ReviewerClient {
     protocol: "stable" | "v2"
   }): Promise<"replied" | "not_found"> {
     try {
-      if (typeof this.client.permission?.request?.list === "function") {
+      if (
+        typeof this.client.permission?.request?.list === "function" ||
+        typeof this.client.session?.generate === "function"
+      ) {
         await this.client.permission.reply({
           sessionID: input.sessionID,
           requestID: input.requestID,
@@ -188,16 +191,16 @@ export class OpenCodeClientAdapter implements ReviewerClient {
     input.signal.addEventListener("abort", abortRemote, { once: true })
     try {
       if (input.signal.aborted) throw abortError(input.signal.reason)
-      const session = await this.client.session.create({
+      const session = unwrapData(await this.client.session.create({
         title: REVIEWER_SESSION_TITLE,
         agent: REVIEWER_AGENT_ID,
         model: input.model,
         location: { directory: REVIEWER_DIRECTORY },
-      }, { signal: input.signal })
+      }, { signal: input.signal }))
       if (!isRecord(session) || typeof session.id !== "string") throw new Error("OpenCode failed to create a reviewer session")
       sessionID = session.id
       const strictPrompt = `${input.prompt}\n\nReturn only one JSON object without Markdown fences with exactly these keys: "decision" ("allow", "allow_session", or "deny"), "reasonCode" (lower_snake_case), and "reason" (one sentence).`
-      const result = await this.client.session.generate({ sessionID, prompt: strictPrompt }, { signal: input.signal })
+      const result = unwrapData(await this.client.session.generate({ sessionID, prompt: strictPrompt }, { signal: input.signal }))
       if (!isRecord(result) || typeof result.text !== "string") throw new Error("OpenCode reviewer returned no text output")
       return JSON.parse(result.text)
     } finally {

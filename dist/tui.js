@@ -102,6 +102,15 @@ var PluginContext = createContext();
 // src/context.ts
 var MAX_MESSAGE_CHARS = 4000;
 var AUTO_PERMISSIONS_MESSAGE_PREFIX = "[Auto Permissions] The requested action was blocked:";
+var SERVER_PLUGIN_ID = "opencode.auto-permissions.server";
+function denialContinuation(reason) {
+  return `${AUTO_PERMISSIONS_MESSAGE_PREFIX} ${reason} Do not retry the exact blocked action. Continue the task using a safer alternative when possible; ask the user only if no useful safe path remains.`;
+}
+function sameLocation(left, right) {
+  if (!left?.directory || !right?.directory)
+    return true;
+  return left.directory === right.directory && (left.workspaceID ?? undefined) === (right.workspaceID ?? undefined);
+}
 function normalizeAskedEvent(event) {
   if (!isRecord(event))
     return null;
@@ -518,7 +527,7 @@ class OpenCodeClientAdapter {
     await Promise.all(requests);
   }
   async generate(input) {
-    if (typeof this.client.permission?.request?.list === "function")
+    if (typeof this.client.session?.generate === "function")
       return this.generateCurrent(input);
     const stable = typeof this.client.postSessionIdPermissionsPermissionId === "function";
     const session = stable ? this.client.session : this.client.v2?.session ?? this.client.session;
@@ -612,7 +621,7 @@ Example: {"decision":"allow","reasonCode":"authorized_action","reason":"The acti
   }
   async reply(input) {
     try {
-      if (typeof this.client.permission?.request?.list === "function") {
+      if (typeof this.client.permission?.request?.list === "function" || typeof this.client.session?.generate === "function") {
         await this.client.permission.reply({
           sessionID: input.sessionID,
           requestID: input.requestID,
@@ -660,19 +669,19 @@ Example: {"decision":"allow","reasonCode":"authorized_action","reason":"The acti
     try {
       if (input.signal.aborted)
         throw abortError(input.signal.reason);
-      const session = await this.client.session.create({
+      const session = unwrapData(await this.client.session.create({
         title: REVIEWER_SESSION_TITLE,
         agent: REVIEWER_AGENT_ID,
         model: input.model,
         location: { directory: REVIEWER_DIRECTORY }
-      }, { signal: input.signal });
+      }, { signal: input.signal }));
       if (!isRecord2(session) || typeof session.id !== "string")
         throw new Error("OpenCode failed to create a reviewer session");
       sessionID = session.id;
       const strictPrompt = `${input.prompt}
 
 Return only one JSON object without Markdown fences with exactly these keys: "decision" ("allow", "allow_session", or "deny"), "reasonCode" (lower_snake_case), and "reason" (one sentence).`;
-      const result = await this.client.session.generate({ sessionID, prompt: strictPrompt }, { signal: input.signal });
+      const result = unwrapData(await this.client.session.generate({ sessionID, prompt: strictPrompt }, { signal: input.signal }));
       if (!isRecord2(result) || typeof result.text !== "string")
         throw new Error("OpenCode reviewer returned no text output");
       return JSON.parse(result.text);
@@ -1430,10 +1439,24 @@ var PLUGIN_VERSION = "0.2.15";
 var id = "opencode.auto-permissions";
 var plugin = define({
   id,
-  setup(context) {
+  async setup(context) {
+    if (await serverOwnsV2Review(context))
+      return;
     return installReviewer(fromContext(context), { protocols: ["v2"] });
   }
 });
+async function serverOwnsV2Review(context) {
+  const client = context.client;
+  if (typeof client?.session?.generate !== "function" || typeof client?.plugin?.list !== "function") {
+    return false;
+  }
+  try {
+    const plugins = unwrap2(await client.plugin.list(context.location ? { location: context.location } : undefined));
+    return Array.isArray(plugins) && plugins.some((entry) => typeof entry === "object" && entry !== null && Reflect.get(entry, "id") === SERVER_PLUGIN_ID && Reflect.get(Reflect.get(entry, "state") ?? {}, "status") !== "failed");
+  } catch {
+    return false;
+  }
+}
 var tui = async (api, options) => {
   if (await isStableRuntime(api.client))
     return;
@@ -1443,10 +1466,24 @@ var tui = async (api, options) => {
 var tui_default = { ...plugin, tui };
 function fromContext(context) {
   recordEnvironment(context.options, context.client, context.data.session);
+  const data = context.data;
   return {
     options: context.options,
     client: context.client,
-    data: context.data,
+    data: {
+      ...data,
+      on(type, handler) {
+        if (type !== "permission.asked" && type !== "permission.v2.asked") {
+          return data.on(type, handler);
+        }
+        return data.on(type, (event) => {
+          const eventLocation = typeof event === "object" && event !== null ? Reflect.get(event, "location") : undefined;
+          if (eventLocation && !sameLocation(eventLocation, context.location))
+            return;
+          handler(event);
+        });
+      }
+    },
     ...context.location ? { location: context.location } : {},
     showToast(input) {
       context.ui.toast.show(input);
@@ -1553,7 +1590,7 @@ function isRunning(context, sessionID) {
   return typeof status === "function" ? status.call(context.data.session, sessionID) === "running" : false;
 }
 function continuation(reason) {
-  return `${AUTO_PERMISSIONS_MESSAGE_PREFIX} ${reason} Do not retry the exact blocked action. Continue the task using a safer alternative when possible; ask the user only if no useful safe path remains.`;
+  return denialContinuation(reason);
 }
 async function isStableRuntime(client) {
   const value = client;

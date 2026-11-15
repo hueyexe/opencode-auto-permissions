@@ -242,3 +242,133 @@ describe("TUI plugin denial continuation", () => {
     expect(continuation).toContain("[Auto Permissions] The requested action was blocked:")
   })
 })
+
+describe("TUI plugin multi-client deduplication", () => {
+  test("steps aside when the V2 server plugin owns permission review", async () => {
+    const subscriptions: string[] = []
+    const app = {
+      options: {},
+      location: { directory: "/repo-a" },
+      client: {
+        session: { generate: async () => ({ text: "{}" }) },
+        plugin: {
+          list: async () => ({
+            data: [{ id: "opencode.auto-permissions.server", state: { status: "active" } }],
+          }),
+        },
+      },
+      data: {
+        on(type: string) {
+          subscriptions.push(type)
+          return () => {}
+        },
+        session: {
+          root: (id: string) => id,
+          get: (id: string) => ({ id }),
+          message: { list: () => [], get: () => undefined, sync: async () => {} },
+          permission: { list: () => [], sync: async () => {} },
+        },
+      },
+      ui: { toast: { show() {} } },
+    } as unknown as Context
+
+    const dispose = await plugin.setup(app)
+
+    expect(subscriptions).toEqual([])
+    expect(dispose).toBeUndefined()
+  })
+
+  test("remains active when the server plugin failed to load", async () => {
+    const subscriptions: string[] = []
+    const app = {
+      options: {},
+      location: { directory: "/repo-a" },
+      client: {
+        session: { generate: async () => ({ text: "{}" }) },
+        plugin: {
+          list: async () => ({
+            data: [{ id: "opencode.auto-permissions.server", state: { status: "failed", error: "boom" } }],
+          }),
+        },
+      },
+      data: {
+        on(type: string) {
+          subscriptions.push(type)
+          return () => {}
+        },
+        session: {
+          root: (id: string) => id,
+          get: (id: string) => ({ id }),
+          message: { list: () => [], get: () => undefined, sync: async () => {} },
+          permission: { list: () => [], sync: async () => {} },
+        },
+      },
+      ui: { toast: { show() {} } },
+    } as unknown as Context
+
+    const dispose = await plugin.setup(app)
+
+    expect(subscriptions).toEqual([
+      "permission.v2.replied",
+      "permission.replied",
+      "permission.v2.asked",
+      "permission.asked",
+    ])
+    dispose?.()
+  })
+
+  test("ignores permission events from another location when running in TUI fallback mode", async () => {
+    const handlers = new Map<string, Set<(event: unknown) => void>>()
+    const replies: unknown[] = []
+    const foreignRequest = {
+      id: "per_other",
+      sessionID: "ses_other",
+      action: "shell",
+      resources: ["sudo rm -rf /"],
+      save: [],
+    }
+    const app = {
+      options: { model: "cloudflare-workers-ai/@cf/deepseek-ai/deepseek-v4-flash-0731" },
+      location: { directory: "/repo-a" },
+      client: {
+        session: { generate: async () => ({ text: "{}" }) },
+        plugin: {
+          list: async () => ({ data: [] }),
+        },
+        permission: {
+          reply: async (input: unknown) => replies.push(input),
+        },
+      },
+      data: {
+        on(type: string, handler: (event: unknown) => void) {
+          const set = handlers.get(type) ?? new Set()
+          set.add(handler)
+          handlers.set(type, set)
+          return () => set.delete(handler)
+        },
+        session: {
+          root: (id: string) => id,
+          get: (id: string) => ({ id }),
+          message: { list: () => [], get: () => undefined, sync: async () => {} },
+          permission: { list: () => [foreignRequest], sync: async () => {} },
+        },
+      },
+      ui: { toast: { show() {} } },
+    } as unknown as Context
+
+    const dispose = await plugin.setup(app)
+    try {
+      for (const handler of handlers.get("permission.asked") ?? []) {
+        handler({
+          type: "permission.asked",
+          location: { directory: "/repo-b" },
+          data: foreignRequest,
+        })
+      }
+      await settle()
+      expect(replies).toEqual([])
+    } finally {
+      dispose?.()
+    }
+  })
+})

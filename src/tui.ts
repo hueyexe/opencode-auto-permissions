@@ -1,6 +1,6 @@
 import { Plugin } from "@opencode-ai/plugin/tui"
 import type { Context } from "@opencode-ai/plugin/tui/plugin"
-import { AUTO_PERMISSIONS_MESSAGE_PREFIX } from "./context.ts"
+import { denialContinuation, sameLocation, SERVER_PLUGIN_ID } from "./context.ts"
 import { parseConfig } from "./config.ts"
 import { describeError, writeDiagnostic } from "./diagnostics.ts"
 import { installReviewer } from "./reviewer.ts"
@@ -12,10 +12,36 @@ export const id = "opencode.auto-permissions"
 
 const plugin = Plugin.define({
   id,
-  setup(context) {
+  async setup(context) {
+    if (await serverOwnsV2Review(context)) return
     return installReviewer(fromContext(context), { protocols: ["v2"] })
   },
 })
+
+async function serverOwnsV2Review(context: Context): Promise<boolean> {
+  const client = context.client as unknown as {
+    session?: { generate?: unknown }
+    plugin?: { list?: (input?: { location?: Context["location"] }) => Promise<unknown> }
+  }
+  if (typeof client?.session?.generate !== "function" || typeof client?.plugin?.list !== "function") {
+    return false
+  }
+  try {
+    const plugins = unwrap(await client.plugin.list(context.location ? { location: context.location } : undefined))
+    return (
+      Array.isArray(plugins) &&
+      plugins.some(
+        (entry) =>
+          typeof entry === "object" &&
+          entry !== null &&
+          Reflect.get(entry, "id") === SERVER_PLUGIN_ID &&
+          Reflect.get(Reflect.get(entry, "state") ?? {}, "status") !== "failed",
+      )
+    )
+  } catch {
+    return false
+  }
+}
 
 /**
  * Minimal structural type for the transitional TUI plugin API used by older
@@ -52,10 +78,25 @@ export default { ...plugin, tui }
 
 function fromContext(context: Context): RuntimeContext {
   recordEnvironment(context.options, context.client, context.data.session)
+  const data = context.data as unknown as RuntimeContext["data"]
   return {
     options: context.options,
     client: context.client,
-    data: context.data as unknown as RuntimeContext["data"],
+    data: {
+      ...data,
+      on(type, handler) {
+        if (type !== "permission.asked" && type !== "permission.v2.asked") {
+          return data.on(type, handler)
+        }
+        return data.on(type, (event) => {
+          const eventLocation = typeof event === "object" && event !== null
+            ? (Reflect.get(event, "location") as { directory?: string; workspaceID?: string } | undefined)
+            : undefined
+          if (eventLocation && !sameLocation(eventLocation, context.location)) return
+          handler(event)
+        })
+      },
+    },
     ...(context.location ? { location: context.location } : {}),
     showToast(input) {
       context.ui.toast.show(input)
@@ -187,7 +228,7 @@ function isRunning(context: Context, sessionID: string): boolean {
 }
 
 function continuation(reason: string): string {
-  return `${AUTO_PERMISSIONS_MESSAGE_PREFIX} ${reason} Do not retry the exact blocked action. Continue the task using a safer alternative when possible; ask the user only if no useful safe path remains.`
+  return denialContinuation(reason)
 }
 
 async function isStableRuntime(client: unknown): Promise<boolean> {
