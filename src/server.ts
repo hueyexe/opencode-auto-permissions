@@ -4,7 +4,7 @@ import { parseConfig } from "./config.ts"
 import { denialContinuation, sameLocation, SERVER_PLUGIN_ID } from "./context.ts"
 import { describeError, writeDiagnostic } from "./diagnostics.ts"
 import { REVIEWER_DIRECTORY } from "./opencode-client.ts"
-import { installReviewer } from "./reviewer.ts"
+import { installEvaluateReviewer, installReviewer } from "./reviewer.ts"
 import { createStableRuntime, protocolForVersion } from "./stable.ts"
 import type { PermissionRequest, RuntimeContext } from "./types.ts"
 
@@ -31,8 +31,11 @@ const v2Plugin = V2Plugin.define({
     })
     if (config.runtime === "stable") return
     if (context.location?.directory === REVIEWER_DIRECTORY) return
-    if (!supportsServerV2Review(context)) return
-    const cleanup = installServerV2Reviewer(context, config.diagnosticsPath)
+    const evaluate = supportsEvaluateReview(context)
+    if (!evaluate && !supportsServerV2Review(context)) return
+    const cleanup = evaluate
+      ? installServerEvaluateReviewer(context, config.diagnosticsPath)
+      : installServerV2Reviewer(context, config.diagnosticsPath)
     if (!cleanup) return
     try {
       // Advertise that this location has an active server reviewer. The TUI
@@ -51,6 +54,18 @@ const v2Plugin = V2Plugin.define({
   },
 })
 
+function supportsEvaluateReview(context: unknown): boolean {
+  const value = context as Record<string, any>
+  return (
+    typeof value?.permission?.hook === "function" &&
+    typeof value?.session?.get === "function" &&
+    typeof value?.session?.context === "function" &&
+    typeof value?.session?.create === "function" &&
+    typeof value?.session?.generate === "function" &&
+    typeof value?.session?.remove === "function"
+  )
+}
+
 function supportsServerV2Review(context: unknown): boolean {
   const value = context as Record<string, any>
   return (
@@ -65,12 +80,18 @@ function supportsServerV2Review(context: unknown): boolean {
   )
 }
 
-function installServerV2Reviewer(context: any, diagnosticsPath: string | undefined): () => void {
+interface ServerRuntime {
+  context: RuntimeContext
+  listeners: Map<string, Set<(event: unknown) => void>>
+  getSession(sessionID: string): Promise<{ id: string; parentID?: string; location?: { directory?: string; workspaceID?: string } } | undefined>
+  clear(): void
+}
+
+function createServerRuntime(context: any, diagnosticsPath: string | undefined): ServerRuntime {
   const listeners = new Map<string, Set<(event: unknown) => void>>()
   const sessions = new Map<string, { id: string; parentID?: string; location?: { directory?: string; workspaceID?: string } }>()
   const messages = new Map<string, unknown[]>()
   const permissions = new Map<string, PermissionRequest[]>()
-  const abortController = new AbortController()
 
   const getSession = async (sessionID: string) => {
     const cached = sessions.get(sessionID)
@@ -181,7 +202,23 @@ function installServerV2Reviewer(context: any, diagnosticsPath: string | undefin
     },
   }
 
-  const stopReviewer = installReviewer(runtimeContext, { protocols: ["v2"] })
+  return {
+    context: runtimeContext,
+    listeners,
+    getSession,
+    clear() {
+      listeners.clear()
+      sessions.clear()
+      messages.clear()
+      permissions.clear()
+    },
+  }
+}
+
+function installServerV2Reviewer(context: any, diagnosticsPath: string | undefined): () => void {
+  const runtime = createServerRuntime(context, diagnosticsPath)
+  const abortController = new AbortController()
+  const stopReviewer = installReviewer(runtime.context, { protocols: ["v2"] })
   const stream = context.event.subscribe({
     types: ["permission.asked", "permission.replied"],
     signal: abortController.signal,
@@ -197,10 +234,10 @@ function installServerV2Reviewer(context: any, diagnosticsPath: string | undefin
           const sessionID = isRecord(event.data) && typeof event.data.sessionID === "string"
             ? event.data.sessionID
             : undefined
-          const resolvedLocation = eventLocation ?? (sessionID ? (await getSession(sessionID).catch(() => undefined))?.location : undefined)
+          const resolvedLocation = eventLocation ?? (sessionID ? (await runtime.getSession(sessionID).catch(() => undefined))?.location : undefined)
           if (resolvedLocation && !sameLocation(resolvedLocation, context.location)) continue
         }
-        for (const handler of listeners.get(event.type) ?? []) handler(event)
+        for (const handler of runtime.listeners.get(event.type) ?? []) handler(event)
       }
     } catch {
       // Subscription aborted or closed on plugin disposal.
@@ -210,10 +247,18 @@ function installServerV2Reviewer(context: any, diagnosticsPath: string | undefin
   return () => {
     abortController.abort("plugin disposed")
     stopReviewer()
-    listeners.clear()
-    sessions.clear()
-    messages.clear()
-    permissions.clear()
+    runtime.clear()
+  }
+}
+
+function installServerEvaluateReviewer(context: any, diagnosticsPath: string | undefined): () => void {
+  const runtime = createServerRuntime(context, diagnosticsPath)
+  const stopReviewer = installEvaluateReviewer(runtime.context, (name, callback) =>
+    context.permission.hook(name, callback),
+  )
+  return () => {
+    stopReviewer()
+    runtime.clear()
   }
 }
 

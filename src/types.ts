@@ -26,6 +26,20 @@ export type Decision =
   | { kind: "allow_session"; reasonCode: string; reason: string }
   | { kind: "deny"; reasonCode: string; reason: string }
 
+// Mutable permission evaluation passed to the V2 `permission.evaluate` hook.
+// Mutating `effect` (and `message` for a denial) decides the request before a
+// permission prompt is ever created.
+export interface PermissionEvaluation {
+  readonly sessionID: string
+  readonly agent?: string
+  readonly action: string
+  readonly resources: readonly string[]
+  readonly metadata?: Record<string, unknown>
+  readonly source?: { type?: string; messageID?: string; id?: string; callID?: string }
+  effect: "allow" | "ask" | "deny"
+  message?: string
+}
+
 export interface ReviewInput {
   request: {
     action: string

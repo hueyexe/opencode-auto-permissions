@@ -443,6 +443,112 @@ describe("server plugin", () => {
     }
   })
 
+  test("reviews asks through the V2 evaluate hook before a prompt exists", async () => {
+    const callbacks = new Map<string, (input: any) => Promise<void>>()
+    const disposed: boolean[] = []
+    let subscribed = false
+    let generated = 0
+    const context: any = {
+      options: {},
+      location: { directory: "/repo-a" },
+      agent: { transform: async (fn: (draft: any) => void) => fn({ update: () => {} }) },
+      permission: {
+        hook: async (name: string, callback: (input: any) => Promise<void>) => {
+          callbacks.set(name, callback)
+          return { dispose: async () => { disposed.push(true) } }
+        },
+      },
+      event: {
+        subscribe() {
+          subscribed = true
+          return { [Symbol.asyncIterator]: () => ({ async next() { return { done: true, value: undefined } } }) }
+        },
+      },
+      session: {
+        get: async ({ sessionID }: { sessionID: string }) => ({ id: sessionID, location: { directory: "/repo-a" } }),
+        context: async () => [
+          { id: "msg_1", type: "user", role: "user", text: "Run the tests.", model: { providerID: "example", modelID: "main" } },
+        ],
+        create: async () => ({ id: "ses_review" }),
+        generate: async () => {
+          generated++
+          return { text: '{"decision":"allow","reasonCode":"ok","reason":"Allowed."}' }
+        },
+        remove: async () => {},
+      },
+    }
+
+    const cleanup = await server.setup(context)
+    try {
+      const callback = callbacks.get("evaluate")
+      expect(callback).toBeDefined()
+
+      const allowed: any = { sessionID: "ses_root", agent: "build", action: "shell", resources: ["pnpm add left-pad"], effect: "ask" }
+      await callback!(allowed)
+      expect(allowed.effect).toBe("allow")
+      expect(generated).toBe(1)
+
+      // The hidden reviewer's own permission checks never trigger a new review.
+      const reviewer: any = { sessionID: "ses_review", agent: "auto-permissions-reviewer", action: "read", resources: ["*"], effect: "ask" }
+      await callback!(reviewer)
+      expect(reviewer.effect).toBe("ask")
+      expect(generated).toBe(1)
+
+      // Non-ask evaluations are left untouched.
+      const alreadyAllowed: any = { sessionID: "ses_root", agent: "build", action: "read", resources: ["README.md"], effect: "allow" }
+      await callback!(alreadyAllowed)
+      expect(alreadyAllowed.effect).toBe("allow")
+
+      expect(subscribed).toBeFalse()
+    } finally {
+      await cleanup?.()
+    }
+    expect(disposed).toHaveLength(1)
+  })
+
+  test("denies asks through the V2 evaluate hook with the reviewer reason", async () => {
+    const callbacks = new Map<string, (input: any) => Promise<void>>()
+    const context: any = {
+      options: {},
+      location: { directory: "/repo-a" },
+      agent: { transform: async (fn: (draft: any) => void) => fn({ update: () => {} }) },
+      permission: {
+        hook: async (name: string, callback: (input: any) => Promise<void>) => {
+          callbacks.set(name, callback)
+          return { dispose: async () => {} }
+        },
+      },
+      session: {
+        get: async ({ sessionID }: { sessionID: string }) => ({ id: sessionID, location: { directory: "/repo-a" } }),
+        context: async () => [
+          { id: "msg_1", type: "user", role: "user", text: "Clean up the project.", model: { providerID: "example", modelID: "main" } },
+        ],
+        create: async () => ({ id: "ses_review" }),
+        generate: async () => ({
+          text: '{"decision":"deny","reasonCode":"destructive","reason":"This would delete the project."}',
+        }),
+        remove: async () => {},
+      },
+    }
+
+    const cleanup = await server.setup(context)
+    try {
+      const evaluation: any = {
+        sessionID: "ses_root",
+        agent: "build",
+        action: "shell",
+        resources: ["rm -rf ."],
+        effect: "ask",
+      }
+      await callbacks.get("evaluate")!(evaluation)
+      expect(evaluation.effect).toBe("deny")
+      expect(evaluation.message).toContain("Auto Permissions blocked this action")
+      expect(evaluation.message).toContain("This would delete the project.")
+    } finally {
+      await cleanup?.()
+    }
+  })
+
   test("registers the reviewer agent without subscribing inside the isolated reviewer directory", async () => {
     let subscribed = false
     let transformed = false
