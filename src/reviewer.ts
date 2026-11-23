@@ -1,3 +1,4 @@
+import { REVIEWER_AGENT_ID } from "./agent.ts"
 import { OpenCodeClientAdapter } from "./opencode-client.ts"
 import { parseConfig, type Config } from "./config.ts"
 import {
@@ -10,8 +11,10 @@ import { applyDeterministicPolicy } from "./policy.ts"
 import { buildReviewPrompt } from "./prompt.ts"
 import type {
   Decision,
+  PermissionEvaluation,
   PermissionProtocol,
   PermissionRequest,
+  ReviewInput,
   ReviewModel,
   ReviewerClient,
   RuntimeContext,
@@ -102,20 +105,151 @@ export function installReviewer(context: RuntimeContext, overrides: ReviewerOver
   }
 }
 
-async function reviewAndReply(
+export interface EvaluateRegistration {
+  dispose(): Promise<void>
+}
+
+export type EvaluateRegistrar = (
+  name: "evaluate",
+  callback: (input: PermissionEvaluation) => Promise<void>,
+) => Promise<EvaluateRegistration>
+
+/**
+ * Reviews asks through the V2 permission evaluation hook. It runs before a
+ * permission request exists, so the verdict also applies where replying to
+ * `permission.asked` cannot suppress the prompt (for example OpenCode Desktop).
+ */
+export function installEvaluateReviewer(context: RuntimeContext, register: EvaluateRegistrar): () => void {
+  const config = parseConfig(context.options)
+  const client = new OpenCodeClientAdapter(context.client)
+  const sharedReviews = new Map<string, Promise<Decision>>()
+  const sessionApprovals = new Set<string>()
+  const controller = new AbortController()
+  let registration: EvaluateRegistration | undefined
+  let disposed = false
+
+  writeDiagnostic(config.diagnosticsPath, {
+    timestamp: new Date().toISOString(),
+    event: "plugin_started",
+  })
+  void client.prewarm?.().catch(() => undefined)
+
+  void register("evaluate", async (evaluation) => {
+    if (controller.signal.aborted) return
+    await evaluatePermission(
+      context,
+      { config, client, sharedReviews, sessionApprovals, overrides: {}, signal: controller.signal },
+      evaluation,
+      controller.signal,
+      performance.now(),
+    )
+  })
+    .then((value) => {
+      if (disposed) {
+        void value.dispose()
+        return
+      }
+      registration = value
+    })
+    .catch((error) => {
+      writeDiagnostic(config.diagnosticsPath, {
+        timestamp: new Date().toISOString(),
+        event: "failure",
+        failureCategory: failureCategory(error),
+        errorMessage: describeError(error).message,
+      })
+    })
+
+  return () => {
+    disposed = true
+    controller.abort("plugin disposed")
+    void registration?.dispose()
+    sharedReviews.clear()
+    sessionApprovals.clear()
+  }
+}
+
+async function evaluatePermission(
   context: RuntimeContext,
-  client: ReviewerClient,
-  config: Config,
+  runtime: ReviewRuntime,
+  evaluation: PermissionEvaluation,
+  parentSignal: AbortSignal,
+  startedAt: number,
+): Promise<void> {
+  if (evaluation.effect !== "ask" || parentSignal.aborted) return
+  // The hidden reviewer's own session must never be reviewed recursively.
+  if (evaluation.agent === REVIEWER_AGENT_ID) return
+
+  const source = evaluationSource(evaluation.source)
+  const request: PermissionRequest = {
+    id: `evaluate:${evaluation.sessionID}:${evaluation.action}`,
+    sessionID: evaluation.sessionID,
+    action: evaluation.action,
+    resources: [...evaluation.resources],
+    // shortcut: evaluation exposes no save patterns, so session approvals only
+    // apply on the asked-event path; add them here if the hook exposes save.
+    always: [],
+    ...(source ? { source } : {}),
+    protocol: "v2",
+  }
+  writeReceived(runtime.config, request)
+
+  try {
+    const reviewed = await reviewRequest(context, runtime, request, parentSignal, startedAt)
+    if (!reviewed || parentSignal.aborted) return
+    if (reviewed.decision.kind === "deny") {
+      evaluation.effect = "deny"
+      evaluation.message = `Auto Permissions blocked this action: ${reviewed.decision.reason}`
+      writeDecision(runtime.config, request, startedAt, reviewed.decision, reviewed.source, "hook")
+      return
+    }
+    evaluation.effect = "allow"
+    writeDecision(runtime.config, request, startedAt, reviewed.decision, reviewed.source, "hook", "once")
+  } catch (error) {
+    if (parentSignal.aborted) return
+    writeFailure(runtime.config, request, startedAt, error)
+    if (failureCategory(error) === "cancelled") return
+    const reason = failureCategory(error) === "timeout"
+      ? "Permission review timed out before a safety decision was made, so the action remains blocked. This was not a safety denial."
+      : "Permission review could not complete, so the action remains blocked. This was not a safety denial."
+    evaluation.effect = "deny"
+    evaluation.message = `Auto Permissions blocked this action: ${reason}`
+  }
+}
+
+function evaluationSource(value: PermissionEvaluation["source"]): PermissionRequest["source"] {
+  if (value?.type !== "tool" || typeof value.messageID !== "string") return undefined
+  const callID = typeof value.id === "string" ? value.id : value.callID
+  return typeof callID === "string" && callID
+    ? { type: "tool", messageID: value.messageID, callID }
+    : undefined
+}
+
+interface ReviewRuntime {
+  config: Config
+  client: ReviewerClient
+  sharedReviews: Map<string, Promise<Decision>>
+  sessionApprovals: Set<string>
+  overrides: ReviewerOverrides
+  signal: AbortSignal
+}
+
+interface ReviewedDecision {
+  decision: Decision
+  input: ReviewInput
+  source: "policy" | "model" | "session"
+}
+
+async function reviewRequest(
+  context: RuntimeContext,
+  runtime: ReviewRuntime,
   request: PermissionRequest,
   parentSignal: AbortSignal,
-  overrides: ReviewerOverrides,
   startedAt: number,
-  sharedReviews: Map<string, Promise<Decision>>,
-  sessionApprovals: Set<string>,
-  sharedReviewSignal: AbortSignal,
-): Promise<void> {
+): Promise<ReviewedDecision | null> {
+  const { config, client, sharedReviews, sessionApprovals, overrides, signal } = runtime
   const input = await collectReviewInput(context, request, config.userMessageCount)
-  if (parentSignal.aborted) return
+  if (parentSignal.aborted) return null
 
   const policyDecision = applyDeterministicPolicy(input)
   const approvalKey = reusableApprovalKey(config, request, input)
@@ -129,24 +263,49 @@ async function reviewAndReply(
   const reviewKey = concurrentReviewKey(request, input)
   let shared = sharedReviews.get(reviewKey)
   if (!policyDecision && !cachedDecision && !shared) {
-    shared = modelDecision(context, client, config, input, sharedReviewSignal)
+    shared = modelDecision(context, client, config, input, signal)
     sharedReviews.set(reviewKey, shared)
     void shared.finally(() => {
       if (sharedReviews.get(reviewKey) === shared) sharedReviews.delete(reviewKey)
     }).catch(() => undefined)
   }
   const decision = policyDecision ?? cachedDecision ?? (await shared!)
-  if (parentSignal.aborted) return
+  if (parentSignal.aborted) return null
 
   if (approvalKey && (decision.kind === "allow" || decision.kind === "allow_session")) {
     sessionApprovals.add(approvalKey)
   }
 
   overrides.onDecision?.(request, decision, config.shadow)
+  const source = decisionSource(policyDecision, cachedDecision)
   if (config.shadow) {
-    writeDecision(config, request, startedAt, decision, decisionSource(policyDecision, cachedDecision))
-    return
+    writeDecision(config, request, startedAt, decision, source)
+    return null
   }
+  return { decision, input, source }
+}
+
+async function reviewAndReply(
+  context: RuntimeContext,
+  client: ReviewerClient,
+  config: Config,
+  request: PermissionRequest,
+  parentSignal: AbortSignal,
+  overrides: ReviewerOverrides,
+  startedAt: number,
+  sharedReviews: Map<string, Promise<Decision>>,
+  sessionApprovals: Set<string>,
+  sharedReviewSignal: AbortSignal,
+): Promise<void> {
+  const reviewed = await reviewRequest(
+    context,
+    { config, client, sharedReviews, sessionApprovals, overrides, signal: sharedReviewSignal },
+    request,
+    parentSignal,
+    startedAt,
+  )
+  if (!reviewed || parentSignal.aborted) return
+  const { decision, input, source } = reviewed
 
   const pending = await isRequestPending(context, request)
   if (!pending || parentSignal.aborted) return
@@ -166,7 +325,7 @@ async function reviewAndReply(
       request,
       startedAt,
       decision,
-      decisionSource(policyDecision, cachedDecision),
+      source,
       result,
       reply === "always" ? "session" : "once",
     )
@@ -181,7 +340,7 @@ async function reviewAndReply(
     protocol: request.protocol,
   })
   context.showToast?.({ title: "Blocked", message: decision.reason, variant: "warning", duration: 4_000 })
-  writeDecision(config, request, startedAt, decision, decisionSource(policyDecision, cachedDecision), result)
+  writeDecision(config, request, startedAt, decision, source, result)
   if (result === "replied") context.resumeAfterDenial?.(request.sessionID, decision.reason, "denied")
 }
 
@@ -271,7 +430,7 @@ function writeDecision(
   startedAt: number,
   decision: Decision,
   source: "policy" | "model" | "session",
-  replyResult?: "replied" | "not_found" | "manual",
+  replyResult?: "replied" | "not_found" | "manual" | "hook",
   approvalScope?: "once" | "session",
 ): void {
   writeDiagnostic(config.diagnosticsPath, {
